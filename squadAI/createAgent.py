@@ -25,11 +25,18 @@ class Agent(BaseModel):
     )
     backstory: str = Field(default=None, description="Provide character to the agent")
     tools: list[Tool] = []
+    max_iterations: int = Field(
+        default=4, description="Max ReAct loop iterations before failing"
+    )
 
     @computed_field(return_type=InstanceOf[ReactAgent])
     @property
     def react_agent(self):
-        return ReactAgent(tools=self.tools, prompt=self.backstory)
+        return ReactAgent(
+            tools=self.tools,
+            prompt=self.backstory,
+            max_iterations=self.max_iterations,
+        )
 
     def creat_user_prompt(self, task: str, task_expected_output=None, context=None):
         """
