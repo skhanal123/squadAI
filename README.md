@@ -12,6 +12,36 @@ SquadAI provides a simple abstraction layer around:
 - **Orchestration**: sequential task execution with dependency context passing (`squadAI/squadAgent.py`)
 - **ReAct-style execution loop**: tool-calling interaction with an LLM (`squadAI/reactAgent.py`)
 
+At a high level, you define tools and agents, wire tasks together, and `SquadAgents` runs them in order—each task is handled by its assigned agent through an LLM tool-calling loop:
+
+```mermaid
+flowchart TD
+    subgraph setup["Define workflow"]
+        Tools["Tools<br/>(Python functions)"]
+        Agents["Agents<br/>(backstory + tools)"]
+        Tasks["Tasks<br/>(description, agent, optional deps)"]
+        Tools --> Agents --> Tasks
+    end
+
+    Tasks --> Run["SquadAgents.run()"]
+    Run --> Loop["Next task in list"]
+
+    subgraph execute["Per-task execution"]
+        Loop --> Deps{"Has<br/>dependencies?"}
+        Deps -->|yes| Context["Merge upstream<br/>task outputs"]
+        Deps -->|no| AgentRun["Agent.run()"]
+        Context --> AgentRun
+        AgentRun --> React["ReAct loop"]
+        React <-->|"plan / respond"| LLM["LLM"]
+        React -->|"tool_call"| ToolExec["Execute Python tools"]
+        ToolExec -->|"observation"| React
+        React --> Store["Store task output"]
+    end
+
+    Store --> Loop
+    Loop -->|"all tasks done"| Result["Return final task output"]
+```
+
 ## Repository structure
 
 ```text
