@@ -17,19 +17,21 @@ class SquadAgents(BaseModel):
     tasks: list[InstanceOf[Task]] = []
 
     def run(self, **kwargs):
+        if not self.tasks:
+            return None
+
         context_lookup = {}
+        task_output = None
 
-        if self.tasks:
-            for task in self.tasks:
-                if task.dependency:
-                    task_context = " ".join(
-                        context_lookup[i.id] for i in task.dependency
-                    )
-                    task_output = task.agent.run(task, context=task_context, **kwargs)
+        for task in self.tasks:
+            if task.dependency:
+                task_context = " ".join(
+                    context_lookup[i.id] for i in task.dependency
+                )
+                task_output = task.agent.run(task, context=task_context, **kwargs)
+            else:
+                task_output = task.agent.run(task, **kwargs)
 
-                    context_lookup[task.id] = task_output
-                else:
-                    task_output = task.agent.run(task, **kwargs)
-                    context_lookup[task.id] = task_output
+            context_lookup[task.id] = task_output
 
         return task_output

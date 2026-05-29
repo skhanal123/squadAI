@@ -5,24 +5,33 @@ from openai import OpenAI
 
 load_dotenv()
 
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
-def create_client(llm=None):
+
+def _is_deepseek_model(model: str | None) -> bool:
+    return bool(model and model.startswith("deepseek"))
+
+
+def create_client(llm: str | None = None):
     """
-    This method creates the client of an llm model. The default client would be an llm model from Groq.
+    Create an LLM client for the given model.
 
-    Arguments:
+    If `llm` is omitted, uses the ``LLM_MODEL`` environment variable.
+    DeepSeek models use an OpenAI-compatible client; all others default to Groq.
+
+    Parameters
     ----------
-    llm: name of the llm model
+    llm:
+        Model name (e.g. ``deepseek-chat``). When omitted, reads ``LLM_MODEL`` from the environment.
 
-    Returns:
-    --------
-    client of an llm model
-
-    Arg
+    Returns
+    -------
+    Groq or OpenAI client with a ``chat.completions`` API.
     """
-    if not llm:
-        return Groq()
-    elif llm == "deepseek-chat":
+    model = llm or os.getenv("LLM_MODEL")
+    if _is_deepseek_model(model):
         return OpenAI(
-            api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com"
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url=DEEPSEEK_BASE_URL,
         )
+    return Groq()

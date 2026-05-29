@@ -66,8 +66,8 @@ LLM_MODEL=deepseek-chat
 
 Notes:
 
-- `ReactAgent` currently initializes an OpenAI-compatible client pointed at DeepSeek base URL.
-- `LLM_MODEL` is read at runtime when invoking chat completions.
+- `ReactAgent` obtains its LLM client via `create_client()` in `squadAI/llm.py` (DeepSeek when `LLM_MODEL` starts with `deepseek`, otherwise Groq).
+- `LLM_MODEL` is read at runtime when invoking chat completions and when resolving the default client.
 
 ## Quick start
 

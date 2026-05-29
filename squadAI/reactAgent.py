@@ -1,12 +1,11 @@
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 import json
 import re
-from openai import OpenAI
 from squadAI.tools import Tool
 from squadAI.chat import ChatHistory
-from groq import Groq
+from squadAI.llm import create_client
 from dotenv import load_dotenv
 
 REACT_SYSTEM_PROMPT = """
@@ -67,6 +66,14 @@ AGENT_TOOL_PROMPT = """
 load_dotenv()
 
 
+class ReactAgentError(Exception):
+    """Base exception for ReactAgent failures."""
+
+
+class ReactAgentMaxIterationsError(ReactAgentError):
+    """Raised when the ReAct loop exhausts max_iterations without a final response."""
+
+
 class ReactAgent(BaseModel):
     """
     This is the base class for implementation of react agent.
@@ -82,23 +89,19 @@ class ReactAgent(BaseModel):
     _create_tool_dict: returns dictionary to track the details of the tools assigned to agent
     _create_system_prompt: returns system prompt including all the details including tools
     _create_chat_history: maintain and returns the entire chat history during the conversation
-    _parse_tool_calling: returns the tools and its argumments for calling based on llm response
+    _extract_tag: extracts content from XML-style tags in LLM output
+    _call_llm: sends chat history to the LLM and returns the model response
+    _add_observation: appends an observation message to chat history for the ReAct loop
     invoke: this methods takes the user query and take action accordingly to generate and return the response
     """
 
     tools: list[Tool] = []
     prompt: str
     max_iterations: int = 4
-    # client: Any = Groq()
-    client: Any = OpenAI(
-        api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com"
-    )
+    client: Any = Field(default_factory=create_client)
 
     def _create_tool_dict(self):
-        if self.tools:
-            tools_dict = {tool.function_name: tool for tool in self.tools}
-
-        return tools_dict
+        return {tool.function_name: tool for tool in self.tools}
 
     def _create_system_prompt(self):
         if self.tools:
@@ -115,50 +118,144 @@ class ReactAgent(BaseModel):
         chat_history.add_chat(role="system", prompt=system_prompt)
         return chat_history
 
-    def _parse_tool_calling(self, output: str, tag: str):
+    def _extract_tag(self, output: str, tag: str) -> str | None:
+        """
+        Extracts the inner content of an XML-style tag from LLM output.
+
+        Parameters:
+        -----------
+        output: raw text response from the LLM
+        tag: name of the tag to extract (e.g. "response", "tool_call")
+
+        Returns:
+        --------
+        stripped tag content, or None if the tag is missing or malformed
+        """
         pattern = rf"<{tag}>(.*?)</{tag}>"
-        clean_output = re.findall(pattern, output, re.DOTALL)
-        return clean_output[0]
+        matches = re.findall(pattern, output, re.DOTALL)
+        if not matches:
+            return None
+        return matches[0].strip()
+
+    def _call_llm(self, chat_history: ChatHistory) -> str:
+        """
+        Sends the current chat history to the LLM and returns the model response.
+
+        Parameters:
+        -----------
+        chat_history: conversation history to pass to the LLM
+
+        Returns:
+        --------
+        content of the LLM response
+
+        Raises:
+        -------
+        ReactAgentError: if the LLM returns empty content
+        """
+        llm_response = (
+            self.client.chat.completions.create(
+                messages=chat_history.chat(), model=os.getenv("LLM_MODEL")
+            )
+            .choices[0]
+            .message.content
+        )
+        if llm_response is None:
+            raise ReactAgentError("LLM returned empty content")
+        return llm_response
+
+    def _add_observation(self, chat_history: ChatHistory, message: str) -> None:
+        """
+        Appends an observation message to chat history for the ReAct loop.
+
+        Parameters:
+        -----------
+        chat_history: conversation history to update
+        message: error or tool output message to feed back to the LLM
+        """
+        chat_history.add_chat(role="user", prompt=f"<observation>{message}</observation>")
 
     def invoke(self, user_query):
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=f"<question>{user_query}</question>")
 
-        if self.tools:
-            for _ in range(self.max_iterations):
+        if not self.tools:
+            return self._call_llm(chat_history)
 
-                llm_response = (
-                    self.client.chat.completions.create(
-                        messages=chat_history.chat(), model=os.getenv("LLM_MODEL")
-                    )
-                    .choices[0]
-                    .message.content
+        tools_dict = self._create_tool_dict()
+
+        for _ in range(self.max_iterations):
+            llm_response = self._call_llm(chat_history)
+
+            print(llm_response)
+
+            if "<response>" in llm_response:
+                response = self._extract_tag(llm_response, tag="response")
+                if response is not None:
+                    return response
+                self._add_observation(
+                    chat_history,
+                    "Malformed <response> tag. Enclose your final answer in "
+                    "<response>...</response> tags.",
                 )
+                continue
 
-                print(llm_response)
-                if "<response>" in llm_response:
-                    return self._parse_tool_calling(llm_response, tag="response")
+            chat_history.add_chat(role="assistant", prompt=llm_response)
 
-                chat_history.add_chat(role="assistant", prompt=llm_response)
-                if self.tools:
-                    tools_dict = self._create_tool_dict()
-                    print(llm_response)
-                    output = self._parse_tool_calling(llm_response, tag="tool_call")
-                    print(output)
-                    output = json.loads(output)
-
-                    tool_output = tools_dict[output["name"]].run(**output["arguments"])
-
-                    chat_history.add_chat(
-                        "user", prompt=f"<observation>{tool_output}</observation>"
-                    )
-        else:
-            llm_response = (
-                self.client.chat.completions.create(
-                    messages=chat_history.chat(), model=os.getenv("LLM_MODEL")
+            tool_call_raw = self._extract_tag(llm_response, tag="tool_call")
+            if tool_call_raw is None:
+                self._add_observation(
+                    chat_history,
+                    "No valid <tool_call> found. Call a tool or respond with "
+                    "<response>...</response> tags.",
                 )
-                .choices[0]
-                .message.content
-            )
+                continue
 
-        return llm_response
+            try:
+                tool_call = json.loads(tool_call_raw)
+            except json.JSONDecodeError as exc:
+                self._add_observation(
+                    chat_history,
+                    f"Invalid JSON in <tool_call>: {exc}. "
+                    'Expected: {"name": "<tool>", "arguments": {...}, "id": <int>}',
+                )
+                continue
+
+            tool_name = tool_call.get("name")
+            if not tool_name:
+                self._add_observation(
+                    chat_history,
+                    "Tool call missing required 'name' field.",
+                )
+                continue
+
+            if tool_name not in tools_dict:
+                available = ", ".join(tools_dict) or "none"
+                self._add_observation(
+                    chat_history,
+                    f"Unknown tool '{tool_name}'. Available tools: {available}.",
+                )
+                continue
+
+            arguments = tool_call.get("arguments")
+            if not isinstance(arguments, dict):
+                self._add_observation(
+                    chat_history,
+                    "Tool call missing required 'arguments' dict.",
+                )
+                continue
+
+            try:
+                tool_output = tools_dict[tool_name].run(**arguments)
+            except Exception as exc:
+                self._add_observation(
+                    chat_history,
+                    f"Error executing tool '{tool_name}': {exc}",
+                )
+                continue
+
+            self._add_observation(chat_history, str(tool_output))
+
+        raise ReactAgentMaxIterationsError(
+            f"ReAct loop did not produce a <response> within {self.max_iterations} iterations"
+        )
