@@ -4,7 +4,9 @@ __all__ = [
     "Agent",
     "LLMSettings",
     "SquadAgents",
+    "SquadResult",
     "Task",
+    "TaskResult",
     "Tool",
     "create_provider",
     "tool_wrapper",
@@ -28,6 +30,14 @@ def __getattr__(name: str):
         from squadAI.squadAgent import SquadAgents
 
         return SquadAgents
+    if name == "SquadResult":
+        from squadAI.squadAgent import SquadResult
+
+        return SquadResult
+    if name == "TaskResult":
+        from squadAI.squadAgent import TaskResult
+
+        return TaskResult
     if name == "Task":
         from squadAI.task import Task
 

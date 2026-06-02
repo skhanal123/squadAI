@@ -1,6 +1,36 @@
-from pydantic import BaseModel, InstanceOf, model_validator
+from uuid import UUID
+
+from pydantic import BaseModel, Field, InstanceOf, UUID4, model_validator
+
 from squadAI.createAgent import Agent
 from squadAI.task import Task
+
+
+class TaskResult(BaseModel):
+    """Output of a single task within a squad run."""
+
+    task_id: UUID4
+    description: str
+    output: str
+
+
+class SquadResult(BaseModel):
+    """Structured result from ``SquadAgents.run()``."""
+
+    final: str | None = None
+    task_results: list[TaskResult] = Field(default_factory=list)
+
+    @property
+    def outputs(self) -> dict[UUID, str]:
+        """Map each task id to its output string."""
+        return {result.task_id: result.output for result in self.task_results}
+
+    def get(self, task: Task) -> str | None:
+        """Return the output for a specific task, or ``None`` if not found."""
+        for result in self.task_results:
+            if result.task_id == task.id:
+                return result.output
+        return None
 
 
 class SquadAgents(BaseModel):
@@ -14,7 +44,7 @@ class SquadAgents(BaseModel):
 
     Methods:
     validate_task_dependency_order: validates that task dependencies are present and ordered correctly
-    run: executes tasks sequentially and returns the final task output
+    run: executes tasks sequentially and returns a :class:`SquadResult`
     """
 
     agents: list[InstanceOf[Agent]] = []
@@ -59,12 +89,13 @@ class SquadAgents(BaseModel):
 
         return self
 
-    def run(self, **kwargs):
+    def run(self, **kwargs) -> SquadResult:
         if not self.tasks:
-            return None
+            return SquadResult()
 
-        context_lookup = {}
-        task_output = None
+        context_lookup: dict[UUID, str] = {}
+        task_results: list[TaskResult] = []
+        task_output: str | None = None
 
         for task in self.tasks:
             if task.dependency:
@@ -76,5 +107,13 @@ class SquadAgents(BaseModel):
                 task_output = task.agent.run(task, **kwargs)
 
             context_lookup[task.id] = task_output
+            task_results.append(
+                TaskResult(
+                    task_id=task.id,
+                    description=task.task_description,
+                    output=task_output,
+                )
+            )
 
-        return task_output
+        return SquadResult(final=task_output, task_results=task_results)
+

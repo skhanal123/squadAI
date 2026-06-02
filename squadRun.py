@@ -114,7 +114,7 @@ physics_task = Task(
 
 physics_AIsquad = SquadAgents(agents=[physics_instructor], tasks=[physics_task])
 
-pprint(physics_AIsquad.run())
+pprint(physics_AIsquad.run().final)
 
 # -----Output-----#
 """

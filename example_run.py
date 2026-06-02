@@ -89,7 +89,8 @@ def demo_physics():
         agent=physics_agent,
     )
     squad = SquadAgents(agents=[physics_agent], tasks=[physics_task])
-    pprint(squad.run())
+    result = squad.run()
+    pprint(result.final)
     print()
 
 
@@ -122,7 +123,10 @@ def demo_math_chain(a: float = 2, b: float = 3, c: float = 4):
     )
 
     squad = SquadAgents(agents=[add_agent, multiply_agent], tasks=[task1, task2])
-    pprint(squad.run(a=a, b=b, c=c))
+    result = squad.run(a=a, b=b, c=c)
+    print(f"Add step:       {result.get(task1)}")
+    print(f"Multiply step:  {result.get(task2)}")
+    print(f"Final:          {result.final}")
     print()
 
 
@@ -218,8 +222,12 @@ def demo_purchase_approval(
     result = squad.run(quantity=quantity, product=product, state=state, budget=budget)
 
     print("-" * 60)
+    print("Pipeline:")
+    for step in result.task_results:
+        print(f"  [{step.description[:40]}...] -> {step.output[:120]}")
+    print("-" * 60)
     print("Final decision:")
-    pprint(result)
+    pprint(result.final)
     print()
 
 
