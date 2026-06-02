@@ -6,6 +6,22 @@ from squadAI.createAgent import Agent
 from squadAI.task import Task
 
 
+def build_task_context(
+    dependencies: list[Task],
+    context_lookup: dict[UUID, str],
+) -> str:
+    """Build labeled context blocks from upstream task outputs."""
+    blocks = []
+    for index, dependency in enumerate(dependencies, start=1):
+        blocks.append(
+            f'<upstream_task index="{index}">\n'
+            f"<description>{dependency.task_description}</description>\n"
+            f"<output>{context_lookup[dependency.id]}</output>\n"
+            f"</upstream_task>"
+        )
+    return "\n\n".join(blocks)
+
+
 class TaskResult(BaseModel):
     """Output of a single task within a squad run."""
 
@@ -99,9 +115,7 @@ class SquadAgents(BaseModel):
 
         for task in self.tasks:
             if task.dependency:
-                task_context = " ".join(
-                    context_lookup[i.id] for i in task.dependency
-                )
+                task_context = build_task_context(task.dependency, context_lookup)
                 task_output = task.agent.run(task, context=task_context, **kwargs)
             else:
                 task_output = task.agent.run(task, **kwargs)
@@ -116,4 +130,4 @@ class SquadAgents(BaseModel):
             )
 
         return SquadResult(final=task_output, task_results=task_results)
-
+
