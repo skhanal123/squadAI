@@ -16,6 +16,7 @@ class Tool(BaseModel):
 
     Methods:
     run: this method accepts the key, value as kwargs and runs the function
+    to_openai_schema: returns OpenAI-compatible tool schema for native tool calling
     """
 
     function_name: str
@@ -24,6 +25,25 @@ class Tool(BaseModel):
 
     def run(self, **kwargs):
         return self.fn(**kwargs)
+
+    def to_openai_schema(self) -> dict:
+        """Return an OpenAI-compatible tool definition for native tool calling."""
+        parameters = self.fn_signature.get("parameters", {})
+        if "type" not in parameters:
+            parameters = {
+                "type": "object",
+                "properties": parameters.get("properties", {}),
+                "required": parameters.get("required", []),
+            }
+
+        return {
+            "type": "function",
+            "function": {
+                "name": self.function_name,
+                "description": self.fn_signature.get("description") or "",
+                "parameters": parameters,
+            },
+        }
 
 
 def tool_wrapper(fn: Callable):

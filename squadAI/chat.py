@@ -1,18 +1,34 @@
 class ChatHistory:
     """
-    This class helps to create the chat history based on the user queries and responses received during the conversation
+    Chat history helper for LLM conversations.
 
-    Methods:
-    --------
-    add_chat: this method adds each user query and response to the chat history
-    chat: returns the entire chat history
+    Supports plain messages and native tool-calling message shapes
+    (assistant messages with tool_calls and tool result messages).
     """
 
     def __init__(self):
-        self.history = []
+        self.history: list[dict] = []
 
-    def add_chat(self, role: str, prompt: str):
-        self.history.append({"role": role, "content": prompt})
+    def add_chat(self, role: str, prompt: str | None = None, **extra):
+        message: dict = {"role": role, "content": prompt, **extra}
+        if message.get("content") is None and "tool_calls" not in message:
+            message["content"] = ""
+        self.history.append(message)
 
-    def chat(self):
+    def add_assistant(
+        self,
+        content: str | None,
+        tool_calls: list[dict] | None = None,
+    ) -> None:
+        message: dict = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        self.history.append(message)
+
+    def add_tool_result(self, tool_call_id: str, content: str) -> None:
+        self.history.append(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+        )
+
+    def chat(self) -> list[dict]:
         return self.history

@@ -20,7 +20,7 @@ from squadAI.squadAgent import SquadAgents
 
 TOOL_RULES = (
     "You MUST use your tools for every calculation or lookup — never guess numbers. "
-    "After tools return, give your final answer inside <response>...</response> tags."
+    "After tools return, give a clear final answer."
 )
 
 PRODUCT_CATALOG = {
@@ -173,7 +173,7 @@ def demo_purchase_approval(
             "You are a finance approver. Read the final order total from <context> "
             "and compare it to the budget given in the task. "
             "Reply with APPROVED if total <= budget, otherwise REJECTED, "
-            "and briefly explain why. Use <response>...</response> tags."
+            "and briefly explain why."
         ),
         max_iterations=4,
     )

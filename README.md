@@ -33,8 +33,8 @@ flowchart TD
         Context --> AgentRun
         AgentRun --> React["ReAct loop"]
         React <-->|"plan / respond"| LLM["LLM"]
-        React -->|"tool_call"| ToolExec["Execute Python tools"]
-        ToolExec -->|"observation"| React
+        React -->|"tool_calls"| ToolExec["Execute Python tools"]
+        ToolExec -->|"tool result"| React
         React --> Store["Store task output"]
     end
 
@@ -46,15 +46,18 @@ flowchart TD
 
 ```text
 squadAI/
-  chat.py         # chat history helper
+  __init__.py     # public API exports
+  chat.py         # chat history helper (incl. native tool messages)
   createAgent.py  # Agent model and execution entrypoint
-  llm.py          # client factory helper
-  reactAgent.py   # ReAct loop and tool-call parsing
+  llm.py          # LLM settings and provider factory
+  providers/      # LLM provider adapters (OpenAI-compatible, Groq, mock)
+  reactAgent.py   # ReAct loop with native tool calling
   squadAgent.py   # multi-task orchestrator
   task.py         # Task model
   tools.py        # Tool class and decorator wrapper
-  utils.py        # function signature utilities
-squadRun.py       # runnable examples
+  utils.py        # function signature / JSON schema utilities
+example_run.py    # runnable examples
+tests/            # unit tests (mock provider)
 requirements.txt  # Python dependencies
 ```
 
@@ -90,76 +93,65 @@ The runtime loads environment variables using `python-dotenv`.
 Create a `.env` file in the project root:
 
 ```env
-DEEPSEEK_API_KEY=your_api_key_here
+# Provider: openai_compatible | groq | mock
+LLM_PROVIDER=openai_compatible
+
+# Model name (e.g. deepseek-chat, llama-3.3-70b-versatile)
 LLM_MODEL=deepseek-chat
+
+# Provider credentials (set the ones you use)
+DEEPSEEK_API_KEY=your_deepseek_key_here
+GROQ_API_KEY=your_groq_key_here
+
+# Optional overrides
+LLM_API_KEY=your_api_key_here
+LLM_BASE_URL=https://api.deepseek.com
 ```
 
 Notes:
 
-- `ReactAgent` obtains its LLM client via `create_client()` in `squadAI/llm.py` (DeepSeek when `LLM_MODEL` starts with `deepseek`, otherwise Groq).
-- `LLM_MODEL` is read at runtime when invoking chat completions and when resolving the default client.
+- Tool schemas are passed via the provider API; the model returns structured `tool_calls`.
+- If `LLM_PROVIDER` is omitted, DeepSeek models (`deepseek-*`) use `openai_compatible`; other models default to `groq`.
+- Set `LLM_PROVIDER=mock` for offline tests (see `tests/test_native_tools.py`).
 
 ## Quick start
 
 You can run the included examples:
 
 ```bash
-python squadRun.py
+python example_run.py
 ```
 
-`squadRun.py` demonstrates:
+`example_run.py` demonstrates:
 
 - Wrapping Python functions (`add_two_numbers`, `multiply_two_numbers`) as tools
 - Creating specialized agents with those tools
 - Defining dependent tasks where task 2 consumes task 1 output
 - Running a squad with `SquadAgents(...).run(a=2, b=3, c=4)`
 
-## Minimal usage example
-
-```python
-from squadAI.tools import tool_wrapper
-from squadAI.task import Task
-from squadAI.createAgent import Agent
-from squadAI.squadAgent import SquadAgents
-
-@tool_wrapper
-def add_two_numbers(first_number: float, second_number: float):
-    """Add two numbers."""
-    return first_number + second_number
-
-math_agent = Agent(
-    backstory="You are an expert in math.",
-    tools=[add_two_numbers],
-)
-
-task = Task(
-    task_description="Please add two numbers {a} and {b}",
-    agent=math_agent,
-)
-
-squad = SquadAgents(agents=[math_agent], tasks=[task])
-result = squad.run(a=2, b=3)
-print(result)
-```
-
 ## How orchestration works
 
 1. `SquadAgents.run()` iterates through tasks in order.
 2. If a task has dependencies, dependent task outputs are concatenated into context.
 3. The assigned `Agent.run()` formats the task description with runtime kwargs.
-4. `ReactAgent.invoke()` executes an LLM loop:
-   - receives model output
-   - parses `<tool_call>...</tool_call>` when needed
-   - executes the mapped Python tool
-   - feeds tool output back as `<observation>`
-   - returns `<response>...</response>` content when available
+4. `ReactAgent.invoke()` executes an LLM loop via a **provider adapter**:
+   - sends OpenAI-compatible tool schemas to the LLM
+   - executes structured `tool_calls` and feeds back `role: tool` results
+   - returns the final answer when the model stops calling tools
 
 ## Current limitations and notes
 
 - Task execution order is list-based and sequential.
 - Dependency context is currently concatenated as plain text.
-- Error handling for malformed tool-call responses can be expanded.
 - The codebase is intentionally small and aimed at experimentation and learning.
+
+## Testing
+
+Run unit tests with the mock provider (no API key required):
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## Development
 
@@ -168,7 +160,7 @@ To iterate locally:
 ```bash
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-python squadRun.py
+python example_run.py
 ```
 
 If you add new tools, ensure function annotations and docstrings are present so signature extraction remains useful.

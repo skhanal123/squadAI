@@ -11,6 +11,10 @@ class SquadAgents(BaseModel):
     -----------
     agents: list of instances of agents to perform various task
     tasks: list of tasks to be completed. Tasks will be executed in the same order provided in the list
+
+    Methods:
+    validate_task_dependency_order: validates that task dependencies are present and ordered correctly
+    run: executes tasks sequentially and returns the final task output
     """
 
     agents: list[InstanceOf[Agent]] = []
@@ -18,6 +22,21 @@ class SquadAgents(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_dependency_order(self):
+        """
+        Validates task dependencies when a SquadAgents instance is created.
+
+        Ensures every dependency is included in the squad tasks list and appears
+        earlier in the list than the task that depends on it.
+
+        Returns:
+        --------
+        self: the validated SquadAgents instance
+
+        Raises:
+        -------
+        ValueError: if a dependency is missing from the tasks list or appears at
+            the same index or after its dependent task
+        """
         if not self.tasks:
             return self
 

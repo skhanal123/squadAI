@@ -1,7 +1,10 @@
-from pydantic import BaseModel, Field, UUID4, InstanceOf, computed_field, Json
+from typing import Any
+
+from pydantic import BaseModel, Field, UUID4, InstanceOf, computed_field
 import uuid
 from squadAI.tools import Tool
 from squadAI.reactAgent import ReactAgent
+from squadAI.llm import create_provider
 
 
 class Agent(BaseModel):
@@ -28,6 +31,12 @@ class Agent(BaseModel):
     max_iterations: int = Field(
         default=4, description="Max ReAct loop iterations before failing"
     )
+    provider: Any | None = Field(
+        default=None,
+        description="Optional LLM provider override; defaults to env-based provider",
+    )
+
+    model_config = {"arbitrary_types_allowed": True}
 
     @computed_field(return_type=InstanceOf[ReactAgent])
     @property
@@ -36,6 +45,7 @@ class Agent(BaseModel):
             tools=self.tools,
             prompt=self.backstory,
             max_iterations=self.max_iterations,
+            provider=self.provider or create_provider(),
         )
 
     def creat_user_prompt(self, task: str, task_expected_output=None, context=None):
