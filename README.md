@@ -9,7 +9,7 @@ SquadAI provides a simple abstraction layer around:
 - **Agents**: role-based workers with backstory/prompts (`squadAI/createAgent.py`)
 - **Tools**: Python functions wrapped as callable tools for agents (`squadAI/tools.py`)
 - **Tasks**: structured units of work assigned to agents (`squadAI/task.py`)
-- **Orchestration**: sequential task execution with dependency context passing (`squadAI/squadAgent.py`)
+- **Orchestration**: in-process sequential runs plus durable Temporal workflows (`squadAI/squadAgent.py`, `squadAI/temporal/`)
 - **ReAct-style execution loop**: tool-calling interaction with an LLM (`squadAI/reactAgent.py`)
 
 At a high level, you define tools and agents, wire tasks together, and `SquadAgents` runs them in order—each task is handled by its assigned agent through an LLM tool-calling loop:
@@ -23,13 +23,16 @@ flowchart TD
         Tools --> Agents --> Tasks
     end
 
-    Tasks --> Run["SquadAgents.run()"]
-    Run --> Loop["Next task in list"]
+    Tasks --> Run["SquadAgents.run() / run_temporal()"]
+    Run -->|"in-process"| Loop["Next task in list"]
+    Run -->|"Temporal"| Temporal["SquadWorkflow<br/>(DAG levels + parallel branches)"]
+    Temporal --> Activity["execute_squad_task activity"]
+    Activity --> AgentRun["Agent.run()"]
 
     subgraph execute["Per-task execution"]
         Loop --> Deps{"Has<br/>dependencies?"}
         Deps -->|yes| Context["Merge upstream<br/>task outputs"]
-        Deps -->|no| AgentRun["Agent.run()"]
+        Deps -->|no| AgentRun
         Context --> AgentRun
         AgentRun --> React["ReAct loop"]
         React <-->|"plan / respond"| LLM["LLM"]
@@ -38,8 +41,8 @@ flowchart TD
         React --> Store["Store task output"]
     end
 
-    Store --> Loop
-    Loop -->|"all tasks done"| Result["Return final task output"]
+    Store --> Result["SquadResult"]
+    Temporal --> Result
 ```
 
 ## Repository structure
@@ -53,10 +56,12 @@ squadAI/
   providers/      # LLM provider adapters (OpenAI-compatible, Groq, mock)
   reactAgent.py   # ReAct loop with native tool calling
   squadAgent.py   # multi-task orchestrator
+  temporal/       # Temporal workflow, activities, worker helpers
   task.py         # Task model
   tools.py        # Tool class and decorator wrapper
   utils.py        # function signature / JSON schema utilities
 example_run.py    # runnable examples
+temporal_worker.py # Temporal worker entrypoint
 tests/            # unit tests (mock provider)
 requirements.txt  # Python dependencies
 ```
@@ -131,19 +136,54 @@ python example_run.py
 
 ## How orchestration works
 
-1. `SquadAgents.run()` iterates through tasks in order.
-2. If a task has dependencies, dependent task outputs are concatenated into context.
-3. The assigned `Agent.run()` formats the task description with runtime kwargs.
-4. `ReactAgent.invoke()` executes an LLM loop via a **provider adapter**:
-   - sends OpenAI-compatible tool schemas to the LLM
-   - executes structured `tool_calls` and feeds back `role: tool` results
-   - returns the final answer when the model stops calling tools
+### In-process (`SquadAgents.run()`)
 
-## Current limitations and notes
+1. Validates that dependencies appear **earlier in the tasks list**.
+2. Executes tasks sequentially in list order.
+3. Merges upstream outputs into labeled context blocks for dependent tasks.
 
-- Task execution order is list-based and sequential.
-- Dependency context is currently concatenated as plain text.
-- The codebase is intentionally small and aimed at experimentation and learning.
+### Temporal (`SquadAgents.run_temporal()`)
+
+1. Validates the dependency graph (missing deps and cycles) at squad construction.
+2. Starts a durable `SquadWorkflow` on Temporal.
+3. Executes each DAG level in parallel; dependent levels wait for upstream activities.
+4. Each task runs inside the `execute_squad_task` activity (retries, timeouts, durability).
+
+**Local Temporal setup:**
+
+```bash
+# Install Temporal CLI, then start dev server
+temporal server start-dev
+
+# Terminal 1 — worker (registers example tools)
+python temporal_worker.py
+
+# Terminal 2 — run a squad via Temporal from Python
+python -c "
+import asyncio
+from squadAI.temporal.worker import create_temporal_client
+from squadAI import Agent, Task, SquadAgents
+
+async def main():
+    agent = Agent(backstory='You are concise.')
+    task = Task(task_description='Say hello in one sentence.', agent=agent)
+    squad = SquadAgents(tasks=[task])
+    client = await create_temporal_client()
+    result = await squad.run_temporal(client)
+    print(result.final)
+
+asyncio.run(main())
+"
+```
+
+Environment variables:
+
+```env
+TEMPORAL_ADDRESS=localhost:7233
+TEMPORAL_TASK_QUEUE=squadai
+```
+
+Both paths ultimately call `Agent.run()` → `ReactAgent.invoke()` with native tool calling.
 
 ## Testing
 

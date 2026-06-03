@@ -31,7 +31,7 @@ class TaskResult(BaseModel):
 
 
 class SquadResult(BaseModel):
-    """Structured result from ``SquadAgents.run()``."""
+    """Structured result from ``SquadAgents.run()`` or ``SquadAgents.run_temporal()``."""
 
     final: str | None = None
     task_results: list[TaskResult] = Field(default_factory=list)
@@ -56,58 +56,69 @@ class SquadAgents(BaseModel):
     Attributes:
     -----------
     agents: list of instances of agents to perform various task
-    tasks: list of tasks to be completed. Tasks will be executed in the same order provided in the list
+    tasks: list of tasks to be completed. ``run()`` executes in list order;
+        use ``run_temporal()`` for durable DAG orchestration via Temporal.
 
     Methods:
-    validate_task_dependency_order: validates that task dependencies are present and ordered correctly
-    run: executes tasks sequentially and returns a :class:`SquadResult`
+    validate_task_dependencies: validates the dependency graph at construction
+    run: executes tasks sequentially in-process and returns a :class:`SquadResult`
+    run_temporal: executes tasks via a Temporal workflow (supports parallel branches)
     """
 
     agents: list[InstanceOf[Agent]] = []
     tasks: list[InstanceOf[Task]] = []
 
     @model_validator(mode="after")
-    def validate_task_dependency_order(self):
+    def validate_task_dependencies(self):
         """
-        Validates task dependencies when a SquadAgents instance is created.
+        Validates the task dependency graph when a SquadAgents instance is created.
 
-        Ensures every dependency is included in the squad tasks list and appears
-        earlier in the list than the task that depends on it.
-
-        Returns:
-        --------
-        self: the validated SquadAgents instance
+        Ensures every dependency is included in the squad tasks list and that the
+        graph has no cycles. List order is only required for :meth:`run`; Temporal
+        execution resolves order from the DAG.
 
         Raises:
         -------
-        ValueError: if a dependency is missing from the tasks list or appears at
-            the same index or after its dependent task
+        ValueError: if a dependency is missing or the graph contains a cycle
         """
         if not self.tasks:
             return self
 
-        task_index = {task.id: index for index, task in enumerate(self.tasks)}
+        task_ids = {task.id for task in self.tasks}
 
         for index, task in enumerate(self.tasks):
             for dependency in task.dependency:
-                dep_index = task_index.get(dependency.id)
-                if dep_index is None:
+                if dependency.id not in task_ids:
                     raise ValueError(
                         f"Task at index {index} depends on a task that is not "
                         f"included in the squad tasks list: {dependency.task_description!r}"
                     )
+
+        from squadAI.temporal.schedule import validate_task_specs
+
+        validate_task_specs(self.to_workflow_input().tasks)
+        return self
+
+    def _validate_list_order(self) -> None:
+        """Ensure dependencies appear before dependents for in-process execution."""
+        task_index = {task.id: index for index, task in enumerate(self.tasks)}
+
+        for index, task in enumerate(self.tasks):
+            for dependency in task.dependency:
+                dep_index = task_index[dependency.id]
                 if dep_index >= index:
                     raise ValueError(
                         f"Task at index {index} ({task.task_description!r}) depends on "
                         f"task at index {dep_index} ({dependency.task_description!r}); "
-                        f"dependencies must appear earlier in the tasks list"
+                        f"dependencies must appear earlier in the tasks list for run()"
                     )
 
-        return self
-
     def run(self, **kwargs) -> SquadResult:
+        """Run the squad in-process, sequentially in task list order."""
         if not self.tasks:
             return SquadResult()
+
+        self._validate_list_order()
 
         context_lookup: dict[UUID, str] = {}
         task_results: list[TaskResult] = []
@@ -131,3 +142,26 @@ class SquadAgents(BaseModel):
 
         return SquadResult(final=task_output, task_results=task_results)
 
+    def to_workflow_input(self, **kwargs):
+        """Build a serializable Temporal workflow input from this squad."""
+        from squadAI.temporal.converter import squad_to_workflow_input
+
+        return squad_to_workflow_input(self, **kwargs)
+
+    async def run_temporal(
+        self,
+        client,
+        *,
+        task_queue: str = "squadai",
+        workflow_id: str | None = None,
+        **kwargs,
+    ) -> SquadResult:
+        """Execute the squad as a durable Temporal workflow."""
+        from squadAI.temporal.client import execute_squad_workflow
+
+        return await execute_squad_workflow(
+            client,
+            self.to_workflow_input(**kwargs),
+            task_queue=task_queue,
+            workflow_id=workflow_id,
+        )

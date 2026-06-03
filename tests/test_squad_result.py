@@ -11,7 +11,7 @@ class TestBuildTaskContext(unittest.TestCase):
     def test_single_dependency(self):
         agent = Agent(backstory="Helper.")
         task1 = Task(task_description="Look up price", agent=agent)
-        task2 = Task(task_description="Calculate total", agent=agent)
+        Task(task_description="Calculate total", agent=agent)
         context_lookup = {task1.id: "Unit price is $999."}
 
         context = build_task_context([task1], context_lookup)
@@ -58,7 +58,7 @@ class TestSquadValidation(unittest.TestCase):
 
         self.assertIn("not included in the squad tasks list", str(ctx.exception))
 
-    def test_rejects_dependency_after_dependent(self):
+    def test_accepts_reversed_list_for_temporal(self):
         agent = Agent(backstory="Helper.")
         task1 = Task(task_description="First task", agent=agent)
         task2 = Task(
@@ -67,10 +67,39 @@ class TestSquadValidation(unittest.TestCase):
             agent=agent,
         )
 
-        with self.assertRaises(ValueError) as ctx:
-            SquadAgents(tasks=[task2, task1])
+        squad = SquadAgents(tasks=[task2, task1])
+        self.assertEqual(len(squad.tasks), 2)
 
-        self.assertIn("must appear earlier in the tasks list", str(ctx.exception))
+    def test_rejects_dependency_after_dependent_for_run(self):
+        agent = Agent(backstory="Helper.")
+        task1 = Task(task_description="First task", agent=agent)
+        task2 = Task(
+            task_description="Second task",
+            dependency=[task1],
+            agent=agent,
+        )
+
+        squad = SquadAgents(tasks=[task2, task1])
+
+        with self.assertRaises(ValueError) as ctx:
+            squad.run()
+
+        self.assertIn("must appear earlier in the tasks list for run()", str(ctx.exception))
+
+    def test_rejects_circular_dependencies(self):
+        agent = Agent(backstory="Helper.")
+        task_a = Task(task_description="Task A", agent=agent)
+        task_b = Task(task_description="Task B", agent=agent)
+        task_c = Task(task_description="Task C", agent=agent)
+
+        task_a.dependency = [task_c]
+        task_b.dependency = [task_a]
+        task_c.dependency = [task_b]
+
+        with self.assertRaises(ValueError) as ctx:
+            SquadAgents(tasks=[task_a, task_b, task_c])
+
+        self.assertIn("Circular task dependency", str(ctx.exception))
 
 
 class TestSquadResult(unittest.TestCase):
