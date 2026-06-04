@@ -2,14 +2,16 @@ import json
 from typing import Any
 
 from pydantic import BaseModel, Field
-from dotenv import load_dotenv
 
 from squadAI.chat import ChatHistory
+from squadAI.config import get_settings
 from squadAI.llm import create_provider
 from squadAI.providers.base import LLMResponse, ToolCall
 from squadAI.tools import Tool
 
-load_dotenv()
+
+def _default_max_iterations() -> int:
+    return get_settings().react_max_iterations
 
 TOOL_SYSTEM_PROMPT = """
 You have access to tools for completing tasks. Use them when needed instead of guessing.
@@ -40,7 +42,7 @@ class ReactAgent(BaseModel):
 
     tools: list[Tool] = []
     prompt: str
-    max_iterations: int = 4
+    max_iterations: int = Field(default_factory=_default_max_iterations)
     provider: Any = Field(default_factory=create_provider)
 
     model_config = {"arbitrary_types_allowed": True}

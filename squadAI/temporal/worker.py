@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
-
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from squadAI.config import get_settings
 from squadAI.temporal.activities import execute_squad_task
 from squadAI.temporal.client import DEFAULT_TASK_QUEUE
 from squadAI.temporal.workflow import SquadWorkflow
@@ -18,7 +17,9 @@ async def create_temporal_client(
     target_host: str | None = None,
 ) -> Client:
     """Connect to a Temporal server."""
-    return await Client.connect(target_host or os.getenv("TEMPORAL_ADDRESS", DEFAULT_TEMPORAL_ADDRESS))
+    return await Client.connect(
+        target_host or get_settings().temporal_address
+    )
 
 
 def create_worker(

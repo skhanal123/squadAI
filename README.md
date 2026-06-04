@@ -52,7 +52,8 @@ squadAI/
   __init__.py     # public API exports
   chat.py         # chat history helper (incl. native tool messages)
   createAgent.py  # Agent model and execution entrypoint
-  llm.py          # LLM settings and provider factory
+  config.py       # pydantic-settings (LLM, Temporal, agent defaults)
+  llm.py          # LLM provider factory
   providers/      # LLM provider adapters (OpenAI-compatible, Groq, mock)
   reactAgent.py   # ReAct loop with native tool calling
   squadAgent.py   # multi-task orchestrator
@@ -93,7 +94,7 @@ pip install -r requirements.txt
 
 ## Environment configuration
 
-The runtime loads environment variables using `python-dotenv`.
+Configuration is loaded via **pydantic-settings** from environment variables and a project-root ``.env`` file. See ``squadAI/config.py`` for the full schema.
 
 Create a `.env` file in the project root:
 
@@ -111,6 +112,9 @@ GROQ_API_KEY=your_groq_key_here
 # Optional overrides
 LLM_API_KEY=your_api_key_here
 LLM_BASE_URL=https://api.deepseek.com
+
+# Agent defaults
+REACT_MAX_ITERATIONS=4
 ```
 
 Notes:

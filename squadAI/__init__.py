@@ -3,6 +3,7 @@
 __all__ = [
     "Agent",
     "LLMSettings",
+    "SquadAISettings",
     "SquadAgents",
     "SquadResult",
     "Task",
@@ -10,7 +11,10 @@ __all__ = [
     "TaskValidationError",
     "Tool",
     "ValidationResult",
+    "clear_settings_cache",
     "create_provider",
+    "get_llm_settings",
+    "get_settings",
     "tool_wrapper",
 ]
 
@@ -21,9 +25,25 @@ def __getattr__(name: str):
 
         return Agent
     if name == "LLMSettings":
-        from squadAI.llm import LLMSettings
+        from squadAI.config import LLMSettings
 
         return LLMSettings
+    if name == "SquadAISettings":
+        from squadAI.config import SquadAISettings
+
+        return SquadAISettings
+    if name == "clear_settings_cache":
+        from squadAI.config import clear_settings_cache
+
+        return clear_settings_cache
+    if name == "get_llm_settings":
+        from squadAI.config import get_llm_settings
+
+        return get_llm_settings
+    if name == "get_settings":
+        from squadAI.config import get_settings
+
+        return get_settings
     if name == "create_provider":
         from squadAI.llm import create_provider
 

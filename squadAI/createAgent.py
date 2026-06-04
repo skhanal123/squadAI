@@ -4,7 +4,12 @@ from pydantic import BaseModel, Field, UUID4, InstanceOf, computed_field
 import uuid
 from squadAI.tools import Tool
 from squadAI.reactAgent import ReactAgent
+from squadAI.config import get_settings
 from squadAI.llm import create_provider
+
+
+def _default_max_iterations() -> int:
+    return get_settings().react_max_iterations
 
 
 class Agent(BaseModel):
@@ -29,7 +34,8 @@ class Agent(BaseModel):
     backstory: str = Field(default=None, description="Provide character to the agent")
     tools: list[Tool] = []
     max_iterations: int = Field(
-        default=4, description="Max ReAct loop iterations before failing"
+        default_factory=_default_max_iterations,
+        description="Max ReAct loop iterations before failing",
     )
     provider: Any | None = Field(
         default=None,

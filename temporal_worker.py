@@ -9,14 +9,10 @@ Then register your tools and start the worker:
 """
 
 import asyncio
-import os
 
-from dotenv import load_dotenv
-
+from squadAI.config import get_settings
 from squadAI.temporal.registry import register_tools
 from squadAI.temporal.worker import create_temporal_client, create_worker
-
-load_dotenv()
 
 
 def register_default_tools() -> None:
@@ -42,7 +38,7 @@ def register_default_tools() -> None:
 async def main() -> None:
     register_default_tools()
     client = await create_temporal_client()
-    task_queue = os.getenv("TEMPORAL_TASK_QUEUE", "squadai")
+    task_queue = get_settings().temporal_task_queue
     worker = create_worker(client, task_queue=task_queue)
     print(f"SquadAI Temporal worker listening on queue '{task_queue}'")
     await worker.run()
