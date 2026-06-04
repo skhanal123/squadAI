@@ -7,7 +7,9 @@ __all__ = [
     "SquadResult",
     "Task",
     "TaskResult",
+    "TaskValidationError",
     "Tool",
+    "ValidationResult",
     "create_provider",
     "tool_wrapper",
 ]
@@ -50,4 +52,12 @@ def __getattr__(name: str):
         from squadAI.tools import tool_wrapper
 
         return tool_wrapper
+    if name == "ValidationResult":
+        from squadAI.validation import ValidationResult
+
+        return ValidationResult
+    if name == "TaskValidationError":
+        from squadAI.validation import TaskValidationError
+
+        return TaskValidationError
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

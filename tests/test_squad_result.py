@@ -70,21 +70,26 @@ class TestSquadValidation(unittest.TestCase):
         squad = SquadAgents(tasks=[task2, task1])
         self.assertEqual(len(squad.tasks), 2)
 
-    def test_rejects_dependency_after_dependent_for_run(self):
-        agent = Agent(backstory="Helper.")
+    def test_accepts_reversed_list_for_run(self):
+        provider = MockProvider(
+            [
+                LLMResponse(content="First output."),
+                LLMResponse(content="Second output."),
+            ]
+        )
+        agent = Agent(backstory="Helper.", provider=provider)
         task1 = Task(task_description="First task", agent=agent)
         task2 = Task(
             task_description="Second task",
             dependency=[task1],
             agent=agent,
         )
-
         squad = SquadAgents(tasks=[task2, task1])
 
-        with self.assertRaises(ValueError) as ctx:
-            squad.run()
+        result = squad.run()
 
-        self.assertIn("must appear earlier in the tasks list for run()", str(ctx.exception))
+        self.assertEqual(result.get(task1), "First output.")
+        self.assertEqual(result.get(task2), "Second output.")
 
     def test_rejects_circular_dependencies(self):
         agent = Agent(backstory="Helper.")

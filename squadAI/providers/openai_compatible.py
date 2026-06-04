@@ -1,7 +1,7 @@
 import json
 from typing import Any
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 
 from squadAI.providers.base import LLMProvider, LLMResponse, ToolCall
 
@@ -15,24 +15,47 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         client: Any | None = None,
+        async_client: Any | None = None,
     ):
         self.model = model
         self.client = client or OpenAI(api_key=api_key, base_url=base_url)
+        self.async_client = async_client or AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        )
+
+    def _completion_kwargs(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {"model": self.model, "messages": messages}
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        return kwargs
 
     def complete(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
     ) -> LLMResponse:
-        kwargs: dict[str, Any] = {"model": self.model, "messages": messages}
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
-
-        response = self.client.chat.completions.create(**kwargs)
+        response = self.client.chat.completions.create(
+            **self._completion_kwargs(messages, tools)
+        )
         message = response.choices[0].message
         return _parse_message(response, message)
 
+    async def complete_async(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        response = await self.async_client.chat.completions.create(
+            **self._completion_kwargs(messages, tools)
+        )
+        message = response.choices[0].message
+        return _parse_message(response, message)
 
 def _parse_message(response: Any, message: Any) -> LLMResponse:
     tool_calls: list[ToolCall] = []

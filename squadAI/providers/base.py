@@ -30,3 +30,10 @@ class LLMProvider(Protocol):
         tools: list[dict] | None = None,
     ) -> LLMResponse:
         """Send messages (and optional tool schemas) to the LLM."""
+
+    async def complete_async(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        """Async variant of :meth:`complete`."""

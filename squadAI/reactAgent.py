@@ -71,6 +71,16 @@ class ReactAgent(BaseModel):
             raise ReactAgentError("LLM returned empty content")
         return response
 
+    async def _complete_async(
+        self,
+        chat_history: ChatHistory,
+        tools: list[dict] | None = None,
+    ) -> LLMResponse:
+        response = await self.provider.complete_async(chat_history.chat(), tools=tools)
+        if response.content is None and not response.has_tool_calls:
+            raise ReactAgentError("LLM returned empty content")
+        return response
+
     def _tool_calls_to_api(self, tool_calls: list[ToolCall]) -> list[dict]:
         return [
             {
@@ -118,6 +128,46 @@ class ReactAgent(BaseModel):
 
         for _ in range(self.max_iterations):
             response = self._complete(chat_history, tools=tool_schemas)
+
+            if response.has_tool_calls:
+                chat_history.add_assistant(
+                    content=response.content,
+                    tool_calls=self._tool_calls_to_api(response.tool_calls),
+                )
+                for tool_call in response.tool_calls:
+                    result = self._execute_tool_call(
+                        tools_dict,
+                        tool_call.name,
+                        tool_call.arguments,
+                    )
+                    chat_history.add_tool_result(tool_call.id, result)
+                continue
+
+            if response.content:
+                return response.content
+
+            chat_history.add_chat(
+                role="user",
+                prompt="Provide a final answer or call a tool to continue.",
+            )
+
+        raise ReactAgentMaxIterationsError(
+            f"ReAct loop did not produce a final answer within {self.max_iterations} iterations"
+        )
+
+    async def invoke_async(self, user_query: str) -> str:
+        chat_history = self._create_chat_history()
+        chat_history.add_chat(role="user", prompt=user_query)
+
+        if not self.tools:
+            response = await self._complete_async(chat_history)
+            return response.content or ""
+
+        tools_dict = self._create_tool_dict()
+        tool_schemas = self._tool_schemas()
+
+        for _ in range(self.max_iterations):
+            response = await self._complete_async(chat_history, tools=tool_schemas)
 
             if response.has_tool_calls:
                 chat_history.add_assistant(

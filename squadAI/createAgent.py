@@ -103,10 +103,15 @@ class Agent(BaseModel):
         --------
         llm_response
         """
+        user_prompt = self._build_user_prompt(Task, context=context, **kwargs)
+        return self.react_agent.invoke(user_prompt)
+
+    async def run_async(self, Task, context=None, **kwargs):
+        """Async variant of :meth:`run` using native async provider I/O."""
+        user_prompt = self._build_user_prompt(Task, context=context, **kwargs)
+        return await self.react_agent.invoke_async(user_prompt)
+
+    def _build_user_prompt(self, Task, context=None, **kwargs):
         task = Task.task_description.format(**kwargs)
         task_expected_ouptut = Task.task_output
-        context = context
-
-        user_prompt = self.creat_user_prompt(task, task_expected_ouptut, context)
-        llm_response = self.react_agent.invoke(user_prompt)
-        return llm_response
+        return self.creat_user_prompt(task, task_expected_ouptut, context)
