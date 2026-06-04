@@ -8,10 +8,20 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-ProviderName = Literal["openai_compatible", "groq", "mock"]
+ProviderName = Literal[
+    "openai_compatible",
+    "groq",
+    "mock",
+    "openai",
+    "gemini",
+    "anthropic",
+    "deepseek",
+]
 
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 _ENV_CONFIG = SettingsConfigDict(
     env_file=".env",
@@ -20,17 +30,31 @@ _ENV_CONFIG = SettingsConfigDict(
 )
 
 
+def infer_provider_from_model(model: str) -> ProviderName:
+    """Infer provider from model name when ``LLM_PROVIDER`` is unset."""
+    lower = model.lower()
+    if lower.startswith("deepseek"):
+        return "deepseek"
+    if lower.startswith("gemini"):
+        return "gemini"
+    if lower.startswith("claude"):
+        return "anthropic"
+    if lower.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
+        return "openai"
+    return "groq"
+
+
 class LLMSettings(BaseSettings):
     """LLM provider configuration.
 
     Environment variables (also read from ``.env``):
 
-    - ``LLM_PROVIDER`` — ``openai_compatible``, ``groq``, or ``mock``
+    - ``LLM_PROVIDER`` — provider id (see ``ProviderName``)
     - ``LLM_MODEL`` — model name (default: ``deepseek-chat``)
     - ``LLM_API_KEY`` — generic API key override
     - ``LLM_BASE_URL`` — optional base URL override
-    - ``DEEPSEEK_API_KEY`` — legacy fallback for OpenAI-compatible providers
-    - ``GROQ_API_KEY`` — legacy fallback for Groq
+    - ``OPENAI_API_KEY``, ``GEMINI_API_KEY``, ``ANTHROPIC_API_KEY``
+    - ``DEEPSEEK_API_KEY``, ``GROQ_API_KEY`` — legacy per-provider keys
     """
 
     model_config = SettingsConfigDict(
@@ -43,6 +67,12 @@ class LLMSettings(BaseSettings):
     model: str = "deepseek-chat"
     api_key: str | None = None
     base_url: str | None = None
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
+    google_api_key: str | None = Field(default=None, validation_alias="GOOGLE_API_KEY")
+    anthropic_api_key: str | None = Field(
+        default=None, validation_alias="ANTHROPIC_API_KEY"
+    )
     deepseek_api_key: str | None = Field(
         default=None, validation_alias="DEEPSEEK_API_KEY"
     )
@@ -57,19 +87,26 @@ class LLMSettings(BaseSettings):
     def resolve_provider_and_credentials(self) -> Self:
         provider = self.provider
         if provider is None:
-            provider = (
-                "openai_compatible"
-                if self.model.startswith("deepseek")
-                else "groq"
-            )
+            provider = infer_provider_from_model(self.model)
             object.__setattr__(self, "provider", provider)
 
         api_key = self.api_key
         base_url = self.base_url
 
-        if provider == "openai_compatible":
+        if provider == "openai":
+            api_key = api_key or self.openai_api_key
+            base_url = base_url or OPENAI_BASE_URL
+        elif provider == "gemini":
+            api_key = api_key or self.gemini_api_key or self.google_api_key
+            base_url = base_url or GEMINI_BASE_URL
+        elif provider == "anthropic":
+            api_key = api_key or self.anthropic_api_key
+        elif provider == "deepseek":
             api_key = api_key or self.deepseek_api_key
-            if base_url is None and self.model.startswith("deepseek"):
+            base_url = base_url or DEEPSEEK_BASE_URL
+        elif provider == "openai_compatible":
+            api_key = api_key or self.deepseek_api_key or self.openai_api_key
+            if base_url is None and self.model.lower().startswith("deepseek"):
                 base_url = DEEPSEEK_BASE_URL
         elif provider == "groq":
             api_key = api_key or self.groq_api_key
@@ -81,7 +118,9 @@ class LLMSettings(BaseSettings):
         if provider != "mock" and not api_key:
             raise ValueError(
                 f"An API key is required for provider {provider!r}. "
-                "Set LLM_API_KEY, DEEPSEEK_API_KEY, or GROQ_API_KEY as appropriate."
+                "Set LLM_API_KEY or the provider-specific key "
+                "(OPENAI_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, "
+                "DEEPSEEK_API_KEY, GROQ_API_KEY)."
             )
 
         return self

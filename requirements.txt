@@ -3,6 +3,7 @@ anyio==4.9.0
 certifi==2025.4.26
 colorama==0.4.6
 distro==1.9.0
+anthropic>=0.49.0
 groq==0.26.0
 h11==0.16.0
 httpcore==1.0.9

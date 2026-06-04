@@ -3,11 +3,11 @@ from typing import Any
 
 from openai import AsyncOpenAI, OpenAI
 
-from squadAI.providers.base import LLMProvider, LLMResponse, ToolCall
+from squadAI.providers.base import LLMResponse, ToolCall
 
 
-class OpenAICompatibleProvider:
-    """Provider for OpenAI-compatible APIs (DeepSeek, Ollama, etc.)."""
+class OpenAIChatProvider:
+    """Shared OpenAI SDK chat completions backend for OpenAI-shaped APIs."""
 
     def __init__(
         self,
@@ -44,7 +44,7 @@ class OpenAICompatibleProvider:
             **self._completion_kwargs(messages, tools)
         )
         message = response.choices[0].message
-        return _parse_message(response, message)
+        return parse_openai_message(response, message)
 
     async def complete_async(
         self,
@@ -55,9 +55,14 @@ class OpenAICompatibleProvider:
             **self._completion_kwargs(messages, tools)
         )
         message = response.choices[0].message
-        return _parse_message(response, message)
+        return parse_openai_message(response, message)
 
-def _parse_message(response: Any, message: Any) -> LLMResponse:
+
+class OpenAICompatibleProvider(OpenAIChatProvider):
+    """Generic OpenAI-compatible API (Ollama, custom ``LLM_BASE_URL``, etc.)."""
+
+
+def parse_openai_message(response: Any, message: Any) -> LLMResponse:
     tool_calls: list[ToolCall] = []
     if message.tool_calls:
         for tool_call in message.tool_calls:
@@ -82,3 +87,7 @@ def _parse_message(response: Any, message: Any) -> LLMResponse:
         finish_reason=response.choices[0].finish_reason,
         raw=response,
     )
+
+
+# Backward-compatible alias used by Groq provider
+_parse_message = parse_openai_message

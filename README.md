@@ -54,7 +54,7 @@ squadAI/
   createAgent.py  # Agent model and execution entrypoint
   config.py       # pydantic-settings (LLM, Temporal, agent defaults)
   llm.py          # LLM provider factory
-  providers/      # LLM provider adapters (OpenAI-compatible, Groq, mock)
+  providers/      # LLM provider adapters (one module per backend)
   reactAgent.py   # ReAct loop with native tool calling
   squadAgent.py   # multi-task orchestrator
   temporal/       # Temporal workflow, activities, worker helpers
@@ -99,13 +99,16 @@ Configuration is loaded via **pydantic-settings** from environment variables and
 Create a `.env` file in the project root:
 
 ```env
-# Provider: openai_compatible | groq | mock
-LLM_PROVIDER=openai_compatible
+# Provider: openai | gemini | anthropic | deepseek | groq | openai_compatible | mock
+LLM_PROVIDER=deepseek
 
-# Model name (e.g. deepseek-chat, llama-3.3-70b-versatile)
+# Model name (e.g. deepseek-chat, gpt-4o, gemini-2.0-flash, claude-sonnet-4-20250514)
 LLM_MODEL=deepseek-chat
 
 # Provider credentials (set the ones you use)
+OPENAI_API_KEY=your_openai_key_here
+GEMINI_API_KEY=your_gemini_key_here
+ANTHROPIC_API_KEY=your_anthropic_key_here
 DEEPSEEK_API_KEY=your_deepseek_key_here
 GROQ_API_KEY=your_groq_key_here
 
@@ -117,10 +120,13 @@ LLM_BASE_URL=https://api.deepseek.com
 REACT_MAX_ITERATIONS=4
 ```
 
+Provider modules live under `squadAI/providers/` (one file per backend: `openai.py`, `gemini.py`, `anthropic.py`, `deepseek.py`, `groq.py`, etc.).
+
 Notes:
 
 - Tool schemas are passed via the provider API; the model returns structured `tool_calls`.
-- If `LLM_PROVIDER` is omitted, DeepSeek models (`deepseek-*`) use `openai_compatible`; other models default to `groq`.
+- If `LLM_PROVIDER` is omitted, the provider is inferred from the model prefix: `deepseek-*`, `gemini-*`, `claude-*`, `gpt-*` / `o1-*` / `o3-*` / `o4-*`, else `groq`.
+- Use `LLM_PROVIDER=openai_compatible` with `LLM_BASE_URL` for Ollama or other OpenAI-compatible hosts.
 - Set `LLM_PROVIDER=mock` for offline tests (see `tests/test_native_tools.py`).
 
 ## Quick start
