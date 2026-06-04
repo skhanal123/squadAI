@@ -134,6 +134,10 @@ class SquadAISettings(BaseSettings):
     temporal_address: str = "localhost:7233"
     temporal_task_queue: str = "squadai"
     react_max_iterations: int = Field(default=4, ge=1)
+    include_usage_in_result: bool = Field(
+        default=False,
+        description="When True, populate SquadResult.usage_display for customer-facing output",
+    )
 
 
 @lru_cache

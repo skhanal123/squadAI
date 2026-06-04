@@ -3,8 +3,17 @@ import asyncio
 
 from pydantic import BaseModel, Field, InstanceOf, UUID4, model_validator
 
+from squadAI.config import get_settings
 from squadAI.createAgent import Agent
 from squadAI.task import Task
+from squadAI.usage import (
+    AgentRunResult,
+    TaskUsage,
+    TokenUsage,
+    format_usage_display,
+    merge_usage_by_model,
+    sum_task_usages,
+)
 from squadAI.validation import TaskValidationError, call_task_validator
 
 
@@ -37,12 +46,40 @@ def append_validation_feedback(context: str | None, feedback: str | None) -> str
     return feedback_block
 
 
+def _pop_run_options(kwargs: dict) -> tuple[bool, dict]:
+    include_usage = kwargs.pop("include_usage_in_result", None)
+    if include_usage is None:
+        include_usage = get_settings().include_usage_in_result
+    return bool(include_usage), kwargs
+
+
+def _build_squad_result(
+    task_results: list["TaskResult"],
+    final_output: str | None,
+    *,
+    include_usage_in_result: bool,
+) -> "SquadResult":
+    usage = sum_task_usages(task_results)
+    usage_by_model = merge_usage_by_model(task_results)
+    usage_display = (
+        format_usage_display(task_results) if include_usage_in_result else None
+    )
+    return SquadResult(
+        final=final_output,
+        task_results=task_results,
+        usage=usage,
+        usage_by_model=usage_by_model,
+        usage_display=usage_display,
+    )
+
+
 class TaskResult(BaseModel):
     """Output of a single task within a squad run."""
 
     task_id: UUID4
     description: str
     output: str
+    usage: TaskUsage
 
 
 class SquadResult(BaseModel):
@@ -50,6 +87,9 @@ class SquadResult(BaseModel):
 
     final: str | None = None
     task_results: list[TaskResult] = Field(default_factory=list)
+    usage: TokenUsage = Field(default_factory=TokenUsage)
+    usage_by_model: dict[str, TokenUsage] = Field(default_factory=dict)
+    usage_display: str | None = None
 
     @property
     def outputs(self) -> dict[UUID, str]:
@@ -61,6 +101,13 @@ class SquadResult(BaseModel):
         for result in self.task_results:
             if result.task_id == task.id:
                 return result.output
+        return None
+
+    def get_usage(self, task: Task) -> TaskUsage | None:
+        """Return token usage for a specific task, or ``None`` if not found."""
+        for result in self.task_results:
+            if result.task_id == task.id:
+                return result.usage
         return None
 
 
@@ -135,7 +182,7 @@ class SquadAgents(BaseModel):
         *,
         validation_feedback: str | None = None,
         **kwargs,
-    ) -> str:
+    ) -> AgentRunResult:
         if task.dependency:
             task_context = build_task_context(task.dependency, context_lookup)
         else:
@@ -151,50 +198,71 @@ class SquadAgents(BaseModel):
         *,
         initial_feedback: str | None = None,
         **kwargs,
-    ) -> str:
+    ) -> tuple[str, TaskUsage]:
         """Stage 1: validate this task's output and retry with feedback."""
         feedback = initial_feedback
         last_output = ""
+        total_usage: TaskUsage | None = None
 
         for attempt in range(task.max_retries + 1):
-            last_output = await self._invoke_agent(
+            run_result = await self._invoke_agent(
                 task,
                 context_lookup,
                 validation_feedback=feedback,
                 **kwargs,
             )
+            if total_usage is None:
+                total_usage = run_result.task_usage
+            else:
+                total_usage = total_usage + run_result.task_usage
+            last_output = run_result.output
+
             result = call_task_validator(task, output=last_output, **kwargs)
             if result.approved:
-                return last_output
+                return last_output, total_usage
 
             feedback = result.feedback or "Validation failed."
             if attempt >= task.max_retries:
                 raise TaskValidationError(task, last_output, feedback)
 
-        return last_output
+        return last_output, total_usage or TaskUsage.from_tokens(
+            run_result.model, TokenUsage()
+        )
 
     async def _run_validation_gate(
         self,
         gate_task: Task,
         context_lookup: dict[UUID, str],
         **kwargs,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, TaskUsage, TaskUsage]:
         """Stage 2: run an upstream task and gate task until validation passes."""
         target = gate_task.validates
         target_feedback: str | None = None
         last_target_output = ""
         last_gate_output = ""
+        target_usage: TaskUsage | None = None
+        gate_usage: TaskUsage | None = None
 
         for attempt in range(gate_task.max_retries + 1):
-            last_target_output = await self._execute_task(
+            last_target_output, attempt_target_usage = await self._execute_task(
                 target,
                 context_lookup,
                 validation_feedback=target_feedback,
                 **kwargs,
             )
+            if target_usage is None:
+                target_usage = attempt_target_usage
+            else:
+                target_usage = target_usage + attempt_target_usage
             context_lookup[target.id] = last_target_output
 
-            last_gate_output = await self._invoke_agent(gate_task, context_lookup, **kwargs)
+            gate_result = await self._invoke_agent(gate_task, context_lookup, **kwargs)
+            if gate_usage is None:
+                gate_usage = gate_result.task_usage
+            else:
+                gate_usage = gate_usage + gate_result.task_usage
+            last_gate_output = gate_result.output
+
             result = call_task_validator(
                 gate_task,
                 output=last_gate_output,
@@ -202,13 +270,18 @@ class SquadAgents(BaseModel):
                 **kwargs,
             )
             if result.approved:
-                return last_gate_output, last_target_output
+                return last_gate_output, last_target_output, gate_usage, target_usage
 
             target_feedback = result.feedback or "Validation failed."
             if attempt >= gate_task.max_retries:
                 raise TaskValidationError(gate_task, last_gate_output, target_feedback)
 
-        return last_gate_output, last_target_output
+        return (
+            last_gate_output,
+            last_target_output,
+            gate_usage or gate_result.task_usage,
+            target_usage or attempt_target_usage,
+        )
 
     async def _execute_task(
         self,
@@ -217,7 +290,7 @@ class SquadAgents(BaseModel):
         *,
         validation_feedback: str | None = None,
         **kwargs,
-    ) -> str:
+    ) -> tuple[str, TaskUsage]:
         if task.validates is not None:
             raise ValueError(
                 f"Task {task.task_description!r} is a validation gate and must be "
@@ -225,12 +298,13 @@ class SquadAgents(BaseModel):
             )
 
         if task.validator is None:
-            return await self._invoke_agent(
+            run_result = await self._invoke_agent(
                 task,
                 context_lookup,
                 validation_feedback=validation_feedback,
                 **kwargs,
             )
+            return run_result.output, run_result.task_usage
 
         return await self._run_self_validated(
             task,
@@ -241,13 +315,15 @@ class SquadAgents(BaseModel):
 
     async def run_async(self, **kwargs) -> SquadResult:
         """Run the squad asynchronously by DAG level with parallel branches."""
+        include_usage_in_result, run_kwargs = _pop_run_options(dict(kwargs))
+
         if not self.tasks:
             return SquadResult()
 
         from squadAI.temporal.schedule import execution_levels
 
         validated_targets = self._validated_targets()
-        workflow_input = self.to_workflow_input(**kwargs)
+        workflow_input = self.to_workflow_input(**run_kwargs)
         levels = execution_levels(workflow_input.tasks)
         task_by_id = {str(task.id): task for task in self.tasks}
         task_index = {str(task.id): index for index, task in enumerate(self.tasks)}
@@ -269,10 +345,12 @@ class SquadAgents(BaseModel):
                     parallel_tasks.append(task)
 
             for gate_task in gate_tasks:
-                gate_output, target_output = await self._run_validation_gate(
-                    gate_task,
-                    context_lookup,
-                    **kwargs,
+                gate_output, target_output, gate_usage, target_usage = (
+                    await self._run_validation_gate(
+                        gate_task,
+                        context_lookup,
+                        **run_kwargs,
+                    )
                 )
                 target = gate_task.validates
                 context_lookup[target.id] = target_output
@@ -282,6 +360,7 @@ class SquadAgents(BaseModel):
                         task_id=target.id,
                         description=target.task_description,
                         output=target_output,
+                        usage=target_usage,
                     )
                 )
                 task_results.append(
@@ -289,23 +368,25 @@ class SquadAgents(BaseModel):
                         task_id=gate_task.id,
                         description=gate_task.task_description,
                         output=gate_output,
+                        usage=gate_usage,
                     )
                 )
 
             if parallel_tasks:
-                outputs = await asyncio.gather(
+                results = await asyncio.gather(
                     *[
-                        self._execute_task(task, context_lookup, **kwargs)
+                        self._execute_task(task, context_lookup, **run_kwargs)
                         for task in parallel_tasks
                     ]
                 )
-                for task, output in zip(parallel_tasks, outputs):
+                for task, (output, usage) in zip(parallel_tasks, results):
                     context_lookup[task.id] = output
                     task_results.append(
                         TaskResult(
                             task_id=task.id,
                             description=task.task_description,
                             output=output,
+                            usage=usage,
                         )
                     )
 
@@ -317,7 +398,11 @@ class SquadAgents(BaseModel):
             )
             final_output = context_lookup.get(task_by_id[last_spec.task_id].id)
 
-        return SquadResult(final=final_output, task_results=task_results)
+        return _build_squad_result(
+            task_results,
+            final_output,
+            include_usage_in_result=include_usage_in_result,
+        )
 
     def run(self, **kwargs) -> SquadResult:
         """Run the squad synchronously (wrapper around :meth:`run_async`)."""
@@ -340,9 +425,15 @@ class SquadAgents(BaseModel):
         """Execute the squad as a durable Temporal workflow."""
         from squadAI.temporal.client import execute_squad_workflow
 
-        return await execute_squad_workflow(
+        include_usage_in_result, run_kwargs = _pop_run_options(dict(kwargs))
+        result = await execute_squad_workflow(
             client,
-            self.to_workflow_input(**kwargs),
+            self.to_workflow_input(**run_kwargs),
             task_queue=task_queue,
             workflow_id=workflow_id,
         )
+        if include_usage_in_result and result.usage_display is None:
+            result = result.model_copy(
+                update={"usage_display": format_usage_display(result.task_results)}
+            )
+        return result

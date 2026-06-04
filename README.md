@@ -118,6 +118,9 @@ LLM_BASE_URL=https://api.deepseek.com
 
 # Agent defaults
 REACT_MAX_ITERATIONS=4
+
+# Include human-readable token summary in SquadResult.usage_display (billing fields always populated)
+INCLUDE_USAGE_IN_RESULT=false
 ```
 
 Provider modules live under `squadAI/providers/` (one file per backend: `openai.py`, `gemini.py`, `anthropic.py`, `deepseek.py`, `groq.py`, etc.).
@@ -194,6 +197,32 @@ TEMPORAL_TASK_QUEUE=squadai
 ```
 
 Both paths ultimately call `Agent.run()` → `ReactAgent.invoke()` with native tool calling.
+
+## Token usage and billing
+
+Every LLM completion records input/output token counts. Usage is aggregated per task (including ReAct loops and validation retries) and rolled up on `SquadResult`.
+
+After `squad.run()`:
+
+```python
+result = squad.run()
+
+# Per-task billing (model + tokens)
+for tr in result.task_results:
+    print(tr.usage.model, tr.usage.input_tokens, tr.usage.output_tokens)
+
+# Squad totals keyed by model (apply your price table)
+for model, tokens in result.usage_by_model.items():
+    cost = your_price_fn(model, tokens.input_tokens, tokens.output_tokens)
+
+# Optional customer-facing summary (does not affect billing fields)
+result = squad.run(include_usage_in_result=True)
+print(result.usage_display)
+```
+
+- `SquadResult.usage` — squad-wide token totals (all models combined).
+- `SquadResult.usage_by_model` — tokens grouped by model name for cost calculation.
+- `include_usage_in_result` — when `True`, sets `usage_display`; usage fields are always populated regardless of this flag.
 
 ## Testing
 

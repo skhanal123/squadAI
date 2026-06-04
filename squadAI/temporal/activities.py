@@ -39,9 +39,13 @@ async def execute_squad_task(input: TaskActivityInput) -> TaskActivityOutput:
         task_description=input.description,
         task_output=input.task_output,
     )
-    output = agent.run(task, context=input.context or None, **input.run_kwargs)
+    run_result = agent.run(task, context=input.context or None, **input.run_kwargs)
+    usage = run_result.task_usage
     return TaskActivityOutput(
         task_id=input.task_id,
         description=input.description,
-        output=output,
+        output=run_result.output,
+        model=usage.model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
     )

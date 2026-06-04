@@ -2,6 +2,7 @@ import json
 from typing import Any
 from anthropic import AsyncAnthropic, Anthropic
 from squadAI.providers.base import LLMResponse, ToolCall
+from squadAI.usage import usage_from_anthropic_response
 
 DEFAULT_MAX_TOKENS = 4096
 
@@ -132,6 +133,7 @@ def anthropic_response_to_llm_response(response: Any) -> LLMResponse:
         tool_calls=tool_calls,
         finish_reason=response.stop_reason,
         raw=response,
+        usage=usage_from_anthropic_response(response),
     )
 
 

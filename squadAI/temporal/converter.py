@@ -6,6 +6,7 @@ from squadAI.providers.mock import MockProvider
 from squadAI.squadAgent import SquadAgents
 from squadAI.temporal.models import AgentSpec, SquadWorkflowInput, TaskSpec
 from squadAI.temporal.schedule import execution_levels
+from squadAI.usage import resolve_model_name
 
 
 def _base_agent_spec(agent) -> AgentSpec:
@@ -18,6 +19,7 @@ def _base_agent_spec(agent) -> AgentSpec:
         tool_names=[tool.function_name for tool in agent.tools],
         max_iterations=agent.max_iterations,
         provider=provider_mode,
+        model=resolve_model_name(agent.provider),
         mock_response=None,
     )
 

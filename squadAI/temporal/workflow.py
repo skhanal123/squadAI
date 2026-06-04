@@ -30,6 +30,9 @@ def _as_task_output(raw) -> TaskActivityOutput:
         task_id=raw["task_id"],
         description=raw["description"],
         output=raw["output"],
+        model=raw.get("model", ""),
+        input_tokens=int(raw.get("input_tokens", 0)),
+        output_tokens=int(raw.get("output_tokens", 0)),
     )
 
 

@@ -4,6 +4,7 @@ from typing import Any
 from openai import AsyncOpenAI, OpenAI
 
 from squadAI.providers.base import LLMResponse, ToolCall
+from squadAI.usage import usage_from_openai_response
 
 
 class OpenAIChatProvider:
@@ -86,6 +87,7 @@ def parse_openai_message(response: Any, message: Any) -> LLMResponse:
         tool_calls=tool_calls,
         finish_reason=response.choices[0].finish_reason,
         raw=response,
+        usage=usage_from_openai_response(response),
     )
 
 

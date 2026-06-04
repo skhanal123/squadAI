@@ -8,6 +8,7 @@ from squadAI.config import get_settings
 from squadAI.llm import create_provider
 from squadAI.providers.base import LLMResponse, ToolCall
 from squadAI.tools import Tool
+from squadAI.usage import AgentRunResult, TokenUsage, resolve_model_name
 
 
 def _default_max_iterations() -> int:
@@ -63,6 +64,15 @@ class ReactAgent(BaseModel):
         chat_history.add_chat(role="system", prompt=self._create_system_prompt())
         return chat_history
 
+    def _accumulate_usage(
+        self,
+        accumulator: TokenUsage,
+        response: LLMResponse,
+    ) -> TokenUsage:
+        if response.usage:
+            return accumulator + response.usage
+        return accumulator
+
     def _complete(
         self,
         chat_history: ChatHistory,
@@ -117,19 +127,27 @@ class ReactAgent(BaseModel):
         except Exception as exc:
             return f"Error executing tool '{tool_name}': {exc}"
 
-    def invoke(self, user_query: str) -> str:
+    def invoke(self, user_query: str) -> AgentRunResult:
+        model = resolve_model_name(self.provider)
+        usage = TokenUsage()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
 
         if not self.tools:
             response = self._complete(chat_history)
-            return response.content or ""
+            usage = self._accumulate_usage(usage, response)
+            return AgentRunResult(
+                output=response.content or "",
+                usage=usage,
+                model=model,
+            )
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
 
         for _ in range(self.max_iterations):
             response = self._complete(chat_history, tools=tool_schemas)
+            usage = self._accumulate_usage(usage, response)
 
             if response.has_tool_calls:
                 chat_history.add_assistant(
@@ -146,7 +164,11 @@ class ReactAgent(BaseModel):
                 continue
 
             if response.content:
-                return response.content
+                return AgentRunResult(
+                    output=response.content,
+                    usage=usage,
+                    model=model,
+                )
 
             chat_history.add_chat(
                 role="user",
@@ -157,19 +179,27 @@ class ReactAgent(BaseModel):
             f"ReAct loop did not produce a final answer within {self.max_iterations} iterations"
         )
 
-    async def invoke_async(self, user_query: str) -> str:
+    async def invoke_async(self, user_query: str) -> AgentRunResult:
+        model = resolve_model_name(self.provider)
+        usage = TokenUsage()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
 
         if not self.tools:
             response = await self._complete_async(chat_history)
-            return response.content or ""
+            usage = self._accumulate_usage(usage, response)
+            return AgentRunResult(
+                output=response.content or "",
+                usage=usage,
+                model=model,
+            )
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
 
         for _ in range(self.max_iterations):
             response = await self._complete_async(chat_history, tools=tool_schemas)
+            usage = self._accumulate_usage(usage, response)
 
             if response.has_tool_calls:
                 chat_history.add_assistant(
@@ -186,7 +216,11 @@ class ReactAgent(BaseModel):
                 continue
 
             if response.content:
-                return response.content
+                return AgentRunResult(
+                    output=response.content,
+                    usage=usage,
+                    model=model,
+                )
 
             chat_history.add_chat(
                 role="user",

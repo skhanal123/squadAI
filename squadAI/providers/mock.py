@@ -1,12 +1,19 @@
 import asyncio
 
-from squadAI.providers.base import LLMProvider, LLMResponse, ToolCall
+from squadAI.providers.base import LLMResponse, ToolCall
+from squadAI.usage import TokenUsage
 
 
 class MockProvider:
     """In-memory provider for tests and offline demos."""
 
-    def __init__(self, responses: list[LLMResponse] | None = None):
+    def __init__(
+        self,
+        responses: list[LLMResponse] | None = None,
+        *,
+        model: str = "mock-model",
+    ):
+        self.model = model
         self.responses = list(responses or [])
         self.calls: list[dict] = []
         self._lock = asyncio.Lock()
@@ -22,7 +29,10 @@ class MockProvider:
         self.calls.append({"messages": messages, "tools": tools})
         if self.responses:
             return self.responses.pop(0)
-        return LLMResponse(content="Mock response with no queued replies.")
+        return LLMResponse(
+            content="Mock response with no queued replies.",
+            usage=TokenUsage(),
+        )
 
     def complete(
         self,

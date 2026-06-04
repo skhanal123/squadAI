@@ -14,6 +14,7 @@ class AgentSpec:
     tool_names: list[str] = field(default_factory=list)
     max_iterations: int = 4
     provider: str = "env"
+    model: str = ""
     mock_response: str | None = None
 
 
@@ -55,6 +56,9 @@ class TaskActivityOutput:
     task_id: str
     description: str
     output: str
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass

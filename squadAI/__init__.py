@@ -2,13 +2,16 @@
 
 __all__ = [
     "Agent",
+    "AgentRunResult",
     "LLMSettings",
     "SquadAISettings",
     "SquadAgents",
     "SquadResult",
     "Task",
     "TaskResult",
+    "TaskUsage",
     "TaskValidationError",
+    "TokenUsage",
     "Tool",
     "ValidationResult",
     "clear_settings_cache",
@@ -24,6 +27,18 @@ def __getattr__(name: str):
         from squadAI.createAgent import Agent
 
         return Agent
+    if name == "AgentRunResult":
+        from squadAI.usage import AgentRunResult
+
+        return AgentRunResult
+    if name == "TokenUsage":
+        from squadAI.usage import TokenUsage
+
+        return TokenUsage
+    if name == "TaskUsage":
+        from squadAI.usage import TaskUsage
+
+        return TaskUsage
     if name == "LLMSettings":
         from squadAI.config import LLMSettings
 

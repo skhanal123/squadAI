@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from squadAI.usage import TokenUsage
+
 
 @dataclass
 class ToolCall:
@@ -15,6 +17,7 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
     raw: Any = None
+    usage: TokenUsage | None = None
 
     @property
     def has_tool_calls(self) -> bool:
