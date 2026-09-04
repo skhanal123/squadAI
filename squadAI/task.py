@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field, UUID4, InstanceOf, model_validator
 from typing import Optional, Any
 import uuid
 from squadAI.createAgent import Agent
-from squadAI.validation import TaskValidator
+from squadAI.validation import TaskValidator, ValidationResult
 
 
 class Task(BaseModel):
@@ -66,3 +66,6 @@ class Task(BaseModel):
                 f"in dependency"
             )
         return self
+
+
+Task.model_rebuild()

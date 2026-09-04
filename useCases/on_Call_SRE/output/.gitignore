@@ -1,0 +1,3 @@
+# Generated triage reports — keep directory, ignore run artifacts
+*
+!.gitignore
