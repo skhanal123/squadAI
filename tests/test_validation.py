@@ -180,5 +180,49 @@ class TestStageTwoValidationGate(unittest.TestCase):
         self.assertEqual(len(provider.calls), 2)
 
 
+class TestValidationWithRunKwargs(unittest.TestCase):
+    """Regression: squad.run(template=...) must not leak kwargs into validators."""
+
+    def test_self_validator_ignores_run_template_kwargs(self):
+        provider = MockProvider([LLMResponse(content="long enough")])
+        agent = Agent(backstory="Writer.", provider=provider)
+        task = Task(
+            task_description="Write about {topic}.",
+            agent=agent,
+            validator=lambda output: ValidationResult(approved=len(output) >= 5),
+            max_retries=1,
+        )
+        squad = SquadAgents(tasks=[task])
+
+        result = squad.run(topic="latency")
+
+        self.assertEqual(result.final, "long enough")
+
+    def test_gate_validator_ignores_run_template_kwargs(self):
+        provider = MockProvider(
+            [
+                LLMResponse(content="APPROVED: draft"),
+                LLMResponse(content="LGTM"),
+            ]
+        )
+        agent = Agent(backstory="Helper.", provider=provider)
+        writer = Task(task_description="Draft for {service}", agent=agent)
+        critic = Task(
+            task_description="Review draft",
+            agent=agent,
+            dependency=[writer],
+            validates=writer,
+            validator=lambda critic_output, *, upstream_output: ValidationResult(
+                approved=upstream_output.startswith("APPROVED:")
+            ),
+        )
+        squad = SquadAgents(tasks=[writer, critic])
+
+        result = squad.run(service="checkout-service", region="us-east-1")
+
+        self.assertEqual(result.get(writer), "APPROVED: draft")
+        self.assertEqual(result.get(critic), "LGTM")
+
+
 if __name__ == "__main__":
     unittest.main()

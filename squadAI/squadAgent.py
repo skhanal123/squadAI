@@ -217,7 +217,7 @@ class SquadAgents(BaseModel):
                 total_usage = total_usage + run_result.task_usage
             last_output = run_result.output
 
-            result = call_task_validator(task, output=last_output, **kwargs)
+            result = call_task_validator(task, output=last_output)
             if result.approved:
                 return last_output, total_usage
 
@@ -267,7 +267,6 @@ class SquadAgents(BaseModel):
                 gate_task,
                 output=last_gate_output,
                 upstream_output=last_target_output,
-                **kwargs,
             )
             if result.approved:
                 return last_gate_output, last_target_output, gate_usage, target_usage

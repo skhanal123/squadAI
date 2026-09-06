@@ -177,10 +177,9 @@ def commander_gate_validator(
     critic_output: str,
     *,
     upstream_output: str,
-    **kwargs: object,
 ) -> ValidationResult:
     """Validate commander output structure, evidence quality, and reasoning hygiene."""
-    del critic_output, kwargs  # gate validates upstream (commander) output
+    del critic_output  # gate validates upstream (commander) output
 
     missing = _missing_sections(upstream_output)
     if missing:

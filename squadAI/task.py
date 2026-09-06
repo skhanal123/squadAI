@@ -27,6 +27,10 @@ class Task(BaseModel):
       task in ``dependency``. The upstream task re-runs until this task's validator
       approves the pair of outputs.
 
+    Validator signatures (``squad.run()`` template kwargs are not passed through):
+    - Self: ``validator(output: str) -> ValidationResult | bool``
+    - Gate: ``validator(output: str, *, upstream_output: str) -> ValidationResult | bool``
+
     """
 
     id: UUID4 = Field(

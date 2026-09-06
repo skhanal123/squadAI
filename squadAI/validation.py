@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from squadAI.task import Task
@@ -57,19 +57,18 @@ def call_task_validator(
     *,
     output: str,
     upstream_output: str | None = None,
-    **kwargs: Any,
 ) -> ValidationResult:
-    """Invoke a task validator for self-validation or upstream validation."""
+    """Invoke a task validator for self-validation or upstream validation.
+
+    Validators receive only task output strings — not ``squad.run()`` template
+    parameters (those are used for ``task_description.format()`` only).
+    """
     if task.validator is None:
         raise ValueError(f"Task {task.task_description!r} has no validator configured")
 
     if upstream_output is not None:
-        raw = task.validator(
-            output,
-            upstream_output=upstream_output,
-            **kwargs,
-        )
+        raw = task.validator(output, upstream_output=upstream_output)
     else:
-        raw = task.validator(output, **kwargs)
+        raw = task.validator(output)
 
     return normalize_validation(raw)
