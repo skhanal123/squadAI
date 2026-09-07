@@ -177,7 +177,10 @@ class AnthropicProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
+        del response_format  # Anthropic structured output not wired yet; prompt fallback
         response = self.client.messages.create(**self._request_kwargs(messages, tools))
         return anthropic_response_to_llm_response(response)
 
@@ -185,7 +188,10 @@ class AnthropicProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
+        del response_format
         response = await self.async_client.messages.create(
             **self._request_kwargs(messages, tools)
         )

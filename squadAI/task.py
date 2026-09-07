@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field, UUID4, InstanceOf, model_validator
 from typing import Optional, Any
 import uuid
 from squadAI.createAgent import Agent
+from squadAI.output_schema import model_to_json_schema
 from squadAI.validation import TaskValidator, ValidationResult
 
 
@@ -16,6 +17,7 @@ class Task(BaseModel):
     agent: agent to which the task is assigned
     dependency: list of other dependent tasks, if any, for this task to get executed
     task_output: format of the output when task is executed. This is an optional field
+    output_schema: optional Pydantic model defining structured task output
     validator: optional callable that approves or rejects task output
     max_retries: number of re-attempts after a failed validation (0 = one attempt only)
     validates: optional upstream task to re-run when this task's validator rejects it
@@ -42,6 +44,10 @@ class Task(BaseModel):
         default=[], description="List of dependency tasks for this task to get complete"
     )
     task_output: Optional[str] = None
+    output_schema: Any | None = Field(
+        default=None,
+        description="Optional Pydantic BaseModel subclass for structured task output",
+    )
     validator: TaskValidator | None = Field(
         default=None,
         description="Optional validator callable; omit for tasks without validation",
@@ -60,6 +66,14 @@ class Task(BaseModel):
 
     @model_validator(mode="after")
     def validate_validator_config(self):
+        if self.output_schema is not None:
+            if not isinstance(self.output_schema, type) or not issubclass(
+                self.output_schema, BaseModel
+            ):
+                raise ValueError(
+                    f"Task {self.task_description!r} output_schema must be a "
+                    f"Pydantic BaseModel subclass"
+                )
         if self.validates is not None and self.validator is None:
             raise ValueError(
                 f"Task {self.task_description!r} sets validates=... but has no validator"
@@ -70,6 +84,12 @@ class Task(BaseModel):
                 f"in dependency"
             )
         return self
+
+    def get_output_json_schema(self) -> dict | None:
+        """Return a JSON Schema dict for :attr:`output_schema`, if configured."""
+        if self.output_schema is None:
+            return None
+        return model_to_json_schema(self.output_schema)
 
 
 Task.model_rebuild()

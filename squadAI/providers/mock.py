@@ -25,8 +25,16 @@ class MockProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
-        self.calls.append({"messages": messages, "tools": tools})
+        self.calls.append(
+            {
+                "messages": messages,
+                "tools": tools,
+                "response_format": response_format,
+            }
+        )
         if self.responses:
             return self.responses.pop(0)
         return LLMResponse(
@@ -38,14 +46,26 @@ class MockProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
-        return self._next_response(messages, tools)
+        return self._next_response(
+            messages,
+            tools,
+            response_format=response_format,
+        )
 
     async def complete_async(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
         async with self._lock:
             await asyncio.sleep(0)
-            return self._next_response(messages, tools)
+            return self._next_response(
+                messages,
+                tools,
+                response_format=response_format,
+            )

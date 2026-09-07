@@ -29,20 +29,30 @@ class OpenAIChatProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None,
+        *,
+        response_format: dict | None = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {"model": self.model, "messages": messages}
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        elif response_format is not None:
+            kwargs["response_format"] = response_format
         return kwargs
 
     def complete(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
         response = self.client.chat.completions.create(
-            **self._completion_kwargs(messages, tools)
+            **self._completion_kwargs(
+                messages,
+                tools,
+                response_format=response_format,
+            )
         )
         message = response.choices[0].message
         return parse_openai_message(response, message)
@@ -51,9 +61,15 @@ class OpenAIChatProvider:
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
         response = await self.async_client.chat.completions.create(
-            **self._completion_kwargs(messages, tools)
+            **self._completion_kwargs(
+                messages,
+                tools,
+                response_format=response_format,
+            )
         )
         message = response.choices[0].message
         return parse_openai_message(response, message)

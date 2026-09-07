@@ -26,6 +26,7 @@ class TaskSpec:
     description: str
     dependency_ids: list[str] = field(default_factory=list)
     task_output: str | None = None
+    output_json_schema: dict | None = None
     agent: AgentSpec = field(default_factory=lambda: AgentSpec(backstory=""))
 
 
@@ -44,6 +45,7 @@ class TaskActivityInput:
     task_id: str
     description: str
     task_output: str | None
+    output_json_schema: dict | None
     run_kwargs: dict[str, Any]
     context: str
     agent: AgentSpec

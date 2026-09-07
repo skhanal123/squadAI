@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from squadAI.output_schema import format_context_block
 from squadAI.temporal.models import TaskSpec
 
 
@@ -115,9 +116,10 @@ def build_task_context_from_specs(
     for index, dependency_id in enumerate(dependency_ids, start=1):
         dependency = task_by_id[dependency_id]
         blocks.append(
-            f'<upstream_task index="{index}">\n'
-            f"<description>{dependency.description}</description>\n"
-            f"<output>{context_lookup[dependency_id]}</output>\n"
-            f"</upstream_task>"
+            format_context_block(
+                index=index,
+                description=dependency.description,
+                output=context_lookup[dependency_id],
+            )
         )
     return "\n\n".join(blocks)

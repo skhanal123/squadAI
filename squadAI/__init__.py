@@ -11,6 +11,7 @@ __all__ = [
     "TaskResult",
     "TaskUsage",
     "TaskValidationError",
+    "TaskOutputBase",
     "TokenUsage",
     "Tool",
     "ValidationResult",
@@ -91,6 +92,10 @@ def __getattr__(name: str):
         from squadAI.validation import ValidationResult
 
         return ValidationResult
+    if name == "TaskOutputBase":
+        from squadAI.output_schema import TaskOutputBase
+
+        return TaskOutputBase
     if name == "TaskValidationError":
         from squadAI.validation import TaskValidationError
 

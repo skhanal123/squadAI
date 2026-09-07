@@ -9,6 +9,7 @@ from squadAI.squadAgent import SquadResult
 from squadAI.task import Task
 
 from useCases.on_Call_SRE.fixtures import DEFAULT_INCIDENT_ID, get_incident_profile
+from useCases.on_Call_SRE.validators import commander_output_text
 
 
 @dataclass
@@ -67,6 +68,7 @@ def score_incident_run(
     metrics_out = result.get(task_metrics) or ""
     logs_out = result.get(task_logs) or ""
     commander_out = result.get(task_commander) or ""
+    commander_text = commander_output_text(commander_out)
     runbook_out = result.get(task_runbook) or ""
 
     score = IncidentScore()
@@ -88,21 +90,21 @@ def score_incident_run(
         score.logs_signal = 1
 
     type_field = f"INCIDENT_TYPE: {incident_type}"
-    if type_field in commander_out or f"INCIDENT_TYPE:{incident_type}" in commander_out.replace(" ", ""):
+    if type_field in commander_text or f"INCIDENT_TYPE:{incident_type}" in commander_text.replace(" ", ""):
         score.correct_incident_type = 2
-    elif incident_type in commander_out:
+    elif incident_type in commander_text:
         score.correct_incident_type = 1
 
-    if severity in commander_out:
+    if severity in commander_text:
         score.correct_severity = 2
-    elif "SEV" in commander_out:
+    elif "SEV" in commander_text:
         score.correct_severity = 1
 
-    lower_cmd = commander_out.lower()
+    lower_cmd = commander_text.lower()
     bad_causation = (
         red_herring_version
         and "caused by" in lower_cmd
-        and red_herring_version in commander_out
+        and red_herring_version in commander_text
     )
     if not bad_causation:
         score.reasoning_hygiene = 2
@@ -116,9 +118,9 @@ def score_incident_run(
 
     score.details = {
         "incident_id": incident_id,
-        "commander_has_root_cause": "ROOT_CAUSE:" in commander_out,
-        "commander_has_evidence": "EVIDENCE:" in commander_out,
-        "commander_has_confidence": "CONFIDENCE:" in commander_out,
+        "commander_has_root_cause": "ROOT_CAUSE:" in commander_text,
+        "commander_has_evidence": "EVIDENCE:" in commander_text,
+        "commander_has_confidence": "CONFIDENCE:" in commander_text,
         "expected_incident_type": incident_type,
         "expected_severity": severity,
     }

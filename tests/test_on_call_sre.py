@@ -1,5 +1,6 @@
 """Offline tests for on-call SRE scenario (no LLM API key required)."""
 
+import json
 import unittest
 
 from squadAI.createAgent import Agent
@@ -8,8 +9,32 @@ from squadAI.task import Task
 from squadAI.usage import TaskUsage, TokenUsage
 
 from useCases.on_Call_SRE.scoring import score_incident_run
-from useCases.on_Call_SRE.validators import commander_gate_validator
+from useCases.on_Call_SRE.schemas import IncidentAssessment
+from useCases.on_Call_SRE.validators import (
+    assessment_to_legacy_text,
+    commander_gate_validator,
+)
 from useCases.on_Call_SRE.workflow import build_incident_squad
+
+
+def _valid_commander_json(**overrides) -> str:
+    base = IncidentAssessment(
+        root_cause="payment-db connection pool saturation caused upstream payment timeouts",
+        severity="SEV2",
+        incident_type="DB_POOL_EXHAUSTION",
+        confidence="high — pool exhaustion log precedes payment timeouts",
+        evidence=[
+            "metrics: p99 spiked at 14:12:04 with flat RPS",
+            "logs: ConnectionPool exhausted at 14:12:05",
+            "changes: v2.4.1 deploy at 14:00 noted for correlation",
+        ],
+        red_herrings=[
+            "v2.4.1 deploy timing is correlation only, not proven causation",
+        ],
+    )
+    payload = base.model_dump()
+    payload.update(overrides)
+    return json.dumps(IncidentAssessment.model_validate(payload).model_dump())
 
 
 def _valid_commander_output(**overrides: str) -> str:
@@ -71,6 +96,19 @@ class TestCommanderValidator(unittest.TestCase):
         )
         result = commander_gate_validator("review", upstream_output=output)
         self.assertTrue(result.approved)
+
+
+    def test_accepts_structured_json_output(self):
+        result = commander_gate_validator(
+            "review",
+            upstream_output=_valid_commander_json(),
+        )
+        self.assertTrue(result.approved)
+
+    def test_structured_output_renders_legacy_text(self):
+        legacy = assessment_to_legacy_text(IncidentAssessment.model_validate_json(_valid_commander_json()))
+        self.assertIn("ROOT_CAUSE:", legacy)
+        self.assertIn("INCIDENT_TYPE: DB_POOL_EXHAUSTION", legacy)
 
 
 class TestIncidentScoring(unittest.TestCase):
@@ -136,6 +174,11 @@ class TestWorkflowBuild(unittest.TestCase):
     def test_baseline_and_qa_construct_without_error(self):
         build_incident_squad(variant="baseline")
         build_incident_squad(variant="qa")
+
+    def test_tasks_use_structured_output_schemas(self):
+        bundle = build_incident_squad(variant="baseline")
+        self.assertIsNotNone(bundle.task_metrics.output_schema)
+        self.assertIsNotNone(bundle.task_commander.output_schema)
 
 
 if __name__ == "__main__":

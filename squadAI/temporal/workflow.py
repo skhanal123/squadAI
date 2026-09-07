@@ -65,6 +65,7 @@ class SquadWorkflow:
                         task_id=task.task_id,
                         description=task.description,
                         task_output=task.task_output,
+                        output_json_schema=task.output_json_schema,
                         run_kwargs=input.run_kwargs,
                         context=context,
                         agent=task.agent,

@@ -17,6 +17,7 @@ from useCases.on_Call_SRE.tools import (
     query_metrics,
     search_logs,
 )
+from useCases.on_Call_SRE.schemas import IncidentAssessment, InvestigationReport
 from useCases.on_Call_SRE.validators import commander_gate_validator
 
 Variant = Literal["baseline", "qa"]
@@ -132,7 +133,7 @@ def build_incident_squad(*, variant: Variant = "baseline") -> IncidentTriageBund
     runbook_agent = Agent(
         backstory=(
             f"You are an operations executor. {TOOL_RULES}\n\n"
-            "Read INCIDENT_TYPE from the commander assessment in <context>. "
+            "Read incident_type from the commander assessment JSON in <context>. "
             "Call lookup_runbook with the exact type string (e.g. DB_POOL_EXHAUSTION). "
             "Return the runbook steps verbatim — do not paraphrase or skip steps."
         ),
@@ -143,32 +144,40 @@ def build_incident_squad(*, variant: Variant = "baseline") -> IncidentTriageBund
     task_metrics = Task(
         task_description=(
             "Investigate metrics for service '{service}' in region '{region}' "
-            "for alert at {alert_time} (symptom: {symptom})."
+            "for alert at {alert_time} (symptom: {symptom}). "
+            "Set source to \"metrics\" in the structured output."
         ),
         agent=metrics_agent,
+        output_schema=InvestigationReport,
     )
     task_logs = Task(
         task_description=(
             "Search logs for '{service}' around alert time {alert_time}. "
-            "Filter noise; identify the earliest ERROR that explains the symptom."
+            "Filter noise; identify the earliest ERROR that explains the symptom. "
+            "Set source to \"logs\" in the structured output."
         ),
         agent=logs_agent,
+        output_schema=InvestigationReport,
     )
     task_changes = Task(
         task_description=(
             "Review recent changes (deploys, config, feature flags) for '{service}' "
-            "within 24h of alert {alert_time}. Note timing vs the alert — correlation only."
+            "within 24h of alert {alert_time}. Note timing vs the alert — correlation only. "
+            "Set source to \"changes\" in the structured output."
         ),
         agent=changes_agent,
+        output_schema=InvestigationReport,
     )
     task_commander = Task(
         task_description=(
             "Produce a structured incident assessment for '{service}' "
-            "(alert: {alert_time}, symptom: {symptom})."
+            "(alert: {alert_time}, symptom: {symptom}). "
+            "Use upstream JSON investigation reports as evidence sources."
         ),
         dependency=[task_metrics, task_logs, task_changes],
         agent=commander_agent,
         task_output=COMMANDER_OUTPUT_FORMAT,
+        output_schema=IncidentAssessment,
     )
 
     task_qa: Task | None = None

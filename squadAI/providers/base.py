@@ -31,6 +31,8 @@ class LLMProvider(Protocol):
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
         """Send messages (and optional tool schemas) to the LLM."""
 
@@ -38,5 +40,7 @@ class LLMProvider(Protocol):
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
         """Async variant of :meth:`complete`."""

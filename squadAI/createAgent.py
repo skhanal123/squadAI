@@ -1,5 +1,7 @@
 from typing import Any
 
+import json
+
 from pydantic import BaseModel, Field, UUID4, InstanceOf, computed_field
 import uuid
 from squadAI.tools import Tool
@@ -110,14 +112,39 @@ class Agent(BaseModel):
         llm_response
         """
         user_prompt = self._build_user_prompt(Task, context=context, **kwargs)
-        return self.react_agent.invoke(user_prompt)
+        return self.react_agent.invoke(
+            user_prompt,
+            **self._structured_output_kwargs(Task),
+        )
 
     async def run_async(self, Task, context=None, **kwargs):
         """Async variant of :meth:`run` using native async provider I/O."""
         user_prompt = self._build_user_prompt(Task, context=context, **kwargs)
-        return await self.react_agent.invoke_async(user_prompt)
+        return await self.react_agent.invoke_async(
+            user_prompt,
+            **self._structured_output_kwargs(Task),
+        )
 
     def _build_user_prompt(self, Task, context=None, **kwargs):
         task = Task.task_description.format(**kwargs)
-        task_expected_ouptut = Task.task_output
+        task_expected_ouptut = getattr(Task, "task_output", None)
+        get_schema = getattr(Task, "get_output_json_schema", None)
+        if task_expected_ouptut is None and get_schema is not None:
+            json_schema = get_schema()
+            if json_schema is not None:
+                task_expected_ouptut = (
+                    "Return a JSON object matching this schema:\n"
+                    f"{json.dumps(json_schema, indent=2)}"
+                )
         return self.creat_user_prompt(task, task_expected_ouptut, context)
+
+    def _structured_output_kwargs(self, Task):
+        output_schema = getattr(Task, "output_schema", None)
+        if output_schema is not None:
+            return {"output_schema": output_schema}
+        get_schema = getattr(Task, "get_output_json_schema", None)
+        if get_schema is not None:
+            json_schema = get_schema()
+            if json_schema is not None:
+                return {"output_json_schema": json_schema}
+        return {}

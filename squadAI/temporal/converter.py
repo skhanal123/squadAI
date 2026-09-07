@@ -33,6 +33,7 @@ def squad_to_workflow_input(squad: SquadAgents, **kwargs) -> SquadWorkflowInput:
             description=task.task_description,
             dependency_ids=[str(dep.id) for dep in task.dependency],
             task_output=task.task_output,
+            output_json_schema=task.get_output_json_schema(),
             agent=_base_agent_spec(task.agent),
         )
         for task in squad.tasks

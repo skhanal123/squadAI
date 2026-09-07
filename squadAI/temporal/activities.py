@@ -38,7 +38,12 @@ async def execute_squad_task(input: TaskActivityInput) -> TaskActivityOutput:
     task = SimpleNamespace(
         task_description=input.description,
         task_output=input.task_output,
+        output_schema=None,
     )
+    if input.output_json_schema is not None:
+        task.get_output_json_schema = lambda: input.output_json_schema
+    else:
+        task.get_output_json_schema = lambda: None
     run_result = agent.run(task, context=input.context or None, **input.run_kwargs)
     usage = run_result.task_usage
     return TaskActivityOutput(

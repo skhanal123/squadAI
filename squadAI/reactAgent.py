@@ -6,6 +6,14 @@ from pydantic import BaseModel, Field
 from squadAI.chat import ChatHistory
 from squadAI.config import get_settings
 from squadAI.llm import create_provider
+from squadAI.output_schema import (
+    TaskOutputParseError,
+    build_openai_response_format,
+    build_openai_response_format_from_schema,
+    normalize_task_output,
+    provider_supports_structured_output,
+    try_normalize_task_output,
+)
 from squadAI.providers.base import LLMResponse, ToolCall
 from squadAI.tools import Tool
 from squadAI.usage import AgentRunResult, TokenUsage, resolve_model_name
@@ -20,6 +28,16 @@ When a tool is required, call it with the correct arguments. After receiving too
 provide a clear final answer to the user.
 """
 
+STRUCTURED_FINAL_PROMPT = (
+    "Return your final answer as a single JSON object that matches the required "
+    "output schema. Do not include markdown fences or explanatory prose."
+)
+
+STRUCTURED_RETRY_PROMPT = (
+    "Your previous response did not match the required JSON output schema. "
+    "Return only a valid JSON object that satisfies the schema."
+)
+
 
 class ReactAgentError(Exception):
     """Base exception for ReactAgent failures."""
@@ -27,6 +45,10 @@ class ReactAgentError(Exception):
 
 class ReactAgentMaxIterationsError(ReactAgentError):
     """Raised when the ReAct loop exhausts max_iterations without a final response."""
+
+
+class ReactAgentOutputSchemaError(ReactAgentError):
+    """Raised when structured task output cannot be validated."""
 
 
 class ReactAgent(BaseModel):
@@ -73,12 +95,32 @@ class ReactAgent(BaseModel):
             return accumulator + response.usage
         return accumulator
 
+    def _response_format(
+        self,
+        *,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+    ) -> dict | None:
+        if not provider_supports_structured_output(self.provider):
+            return None
+        if output_schema is not None:
+            return build_openai_response_format(output_schema)
+        if output_json_schema is not None:
+            return build_openai_response_format_from_schema(output_json_schema)
+        return None
+
     def _complete(
         self,
         chat_history: ChatHistory,
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
-        response = self.provider.complete(chat_history.chat(), tools=tools)
+        response = self.provider.complete(
+            chat_history.chat(),
+            tools=tools,
+            response_format=response_format,
+        )
         if response.content is None and not response.has_tool_calls:
             raise ReactAgentError("LLM returned empty content")
         return response
@@ -87,8 +129,14 @@ class ReactAgent(BaseModel):
         self,
         chat_history: ChatHistory,
         tools: list[dict] | None = None,
+        *,
+        response_format: dict | None = None,
     ) -> LLMResponse:
-        response = await self.provider.complete_async(chat_history.chat(), tools=tools)
+        response = await self.provider.complete_async(
+            chat_history.chat(),
+            tools=tools,
+            response_format=response_format,
+        )
         if response.content is None and not response.has_tool_calls:
             raise ReactAgentError("LLM returned empty content")
         return response
@@ -127,20 +175,169 @@ class ReactAgent(BaseModel):
         except Exception as exc:
             return f"Error executing tool '{tool_name}': {exc}"
 
-    def invoke(self, user_query: str) -> AgentRunResult:
+    def _finalize_structured_output(
+        self,
+        raw: str,
+        *,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+    ) -> str:
+        try:
+            return normalize_task_output(
+                raw,
+                model=output_schema,
+                json_schema=output_json_schema,
+            )
+        except TaskOutputParseError as exc:
+            raise ReactAgentOutputSchemaError(str(exc)) from exc
+
+    def _structured_completion(
+        self,
+        chat_history: ChatHistory,
+        usage: TokenUsage,
+        *,
+        response_format: dict | None,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+        prompt: str | None = None,
+    ) -> tuple[str, TokenUsage]:
+        if prompt:
+            chat_history.add_chat(role="user", prompt=prompt)
+        response = self._complete(
+            chat_history,
+            tools=None,
+            response_format=response_format,
+        )
+        usage = self._accumulate_usage(usage, response)
+        output = self._finalize_structured_output(
+            response.content or "",
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+        )
+        return output, usage
+
+    async def _structured_completion_async(
+        self,
+        chat_history: ChatHistory,
+        usage: TokenUsage,
+        *,
+        response_format: dict | None,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+        prompt: str | None = None,
+    ) -> tuple[str, TokenUsage]:
+        if prompt:
+            chat_history.add_chat(role="user", prompt=prompt)
+        response = await self._complete_async(
+            chat_history,
+            tools=None,
+            response_format=response_format,
+        )
+        usage = self._accumulate_usage(usage, response)
+        output = self._finalize_structured_output(
+            response.content or "",
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+        )
+        return output, usage
+
+    def _resolve_structured_output(
+        self,
+        chat_history: ChatHistory,
+        usage: TokenUsage,
+        draft: str,
+        *,
+        response_format: dict | None,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+    ) -> tuple[str, TokenUsage]:
+        normalized = try_normalize_task_output(
+            draft,
+            model=output_schema,
+            json_schema=output_json_schema,
+        )
+        if normalized is not None:
+            return normalized, usage
+
+        output, usage = self._structured_completion(
+            chat_history,
+            usage,
+            response_format=response_format,
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+            prompt=STRUCTURED_FINAL_PROMPT,
+        )
+        return output, usage
+
+    async def _resolve_structured_output_async(
+        self,
+        chat_history: ChatHistory,
+        usage: TokenUsage,
+        draft: str,
+        *,
+        response_format: dict | None,
+        output_schema: type[BaseModel] | None,
+        output_json_schema: dict | None,
+    ) -> tuple[str, TokenUsage]:
+        normalized = try_normalize_task_output(
+            draft,
+            model=output_schema,
+            json_schema=output_json_schema,
+        )
+        if normalized is not None:
+            return normalized, usage
+
+        output, usage = await self._structured_completion_async(
+            chat_history,
+            usage,
+            response_format=response_format,
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+            prompt=STRUCTURED_FINAL_PROMPT,
+        )
+        return output, usage
+
+    def invoke(
+        self,
+        user_query: str,
+        *,
+        output_schema: type[BaseModel] | None = None,
+        output_json_schema: dict | None = None,
+    ) -> AgentRunResult:
         model = resolve_model_name(self.provider)
         usage = TokenUsage()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
+        response_format = self._response_format(
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+        )
+        structured = output_schema is not None or output_json_schema is not None
 
         if not self.tools:
-            response = self._complete(chat_history)
-            usage = self._accumulate_usage(usage, response)
-            return AgentRunResult(
-                output=response.content or "",
-                usage=usage,
-                model=model,
+            response = self._complete(
+                chat_history,
+                response_format=response_format if structured else None,
             )
+            usage = self._accumulate_usage(usage, response)
+            output = response.content or ""
+            if structured:
+                try:
+                    output = self._finalize_structured_output(
+                        output,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                    )
+                except ReactAgentOutputSchemaError:
+                    output, usage = self._structured_completion(
+                        chat_history,
+                        usage,
+                        response_format=response_format,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                        prompt=STRUCTURED_RETRY_PROMPT,
+                    )
+            return AgentRunResult(output=output, usage=usage, model=model)
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
@@ -164,11 +361,17 @@ class ReactAgent(BaseModel):
                 continue
 
             if response.content:
-                return AgentRunResult(
-                    output=response.content,
-                    usage=usage,
-                    model=model,
-                )
+                output = response.content
+                if structured:
+                    output, usage = self._resolve_structured_output(
+                        chat_history,
+                        usage,
+                        output,
+                        response_format=response_format,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                    )
+                return AgentRunResult(output=output, usage=usage, model=model)
 
             chat_history.add_chat(
                 role="user",
@@ -179,20 +382,47 @@ class ReactAgent(BaseModel):
             f"ReAct loop did not produce a final answer within {self.max_iterations} iterations"
         )
 
-    async def invoke_async(self, user_query: str) -> AgentRunResult:
+    async def invoke_async(
+        self,
+        user_query: str,
+        *,
+        output_schema: type[BaseModel] | None = None,
+        output_json_schema: dict | None = None,
+    ) -> AgentRunResult:
         model = resolve_model_name(self.provider)
         usage = TokenUsage()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
+        response_format = self._response_format(
+            output_schema=output_schema,
+            output_json_schema=output_json_schema,
+        )
+        structured = output_schema is not None or output_json_schema is not None
 
         if not self.tools:
-            response = await self._complete_async(chat_history)
-            usage = self._accumulate_usage(usage, response)
-            return AgentRunResult(
-                output=response.content or "",
-                usage=usage,
-                model=model,
+            response = await self._complete_async(
+                chat_history,
+                response_format=response_format if structured else None,
             )
+            usage = self._accumulate_usage(usage, response)
+            output = response.content or ""
+            if structured:
+                try:
+                    output = self._finalize_structured_output(
+                        output,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                    )
+                except ReactAgentOutputSchemaError:
+                    output, usage = await self._structured_completion_async(
+                        chat_history,
+                        usage,
+                        response_format=response_format,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                        prompt=STRUCTURED_RETRY_PROMPT,
+                    )
+            return AgentRunResult(output=output, usage=usage, model=model)
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
@@ -216,11 +446,17 @@ class ReactAgent(BaseModel):
                 continue
 
             if response.content:
-                return AgentRunResult(
-                    output=response.content,
-                    usage=usage,
-                    model=model,
-                )
+                output = response.content
+                if structured:
+                    output, usage = await self._resolve_structured_output_async(
+                        chat_history,
+                        usage,
+                        output,
+                        response_format=response_format,
+                        output_schema=output_schema,
+                        output_json_schema=output_json_schema,
+                    )
+                return AgentRunResult(output=output, usage=usage, model=model)
 
             chat_history.add_chat(
                 role="user",

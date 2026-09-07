@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 
+from pydantic import ValidationError
+
+from squadAI.output_schema import is_json_task_output
 from squadAI.validation import ValidationResult
 
 from useCases.on_Call_SRE.fixtures import VALID_INCIDENT_TYPES, VALID_SEVERITIES
+from useCases.on_Call_SRE.schemas import IncidentAssessment
 
 REQUIRED_SECTIONS = (
     "ROOT_CAUSE:",
@@ -56,6 +61,63 @@ STRONG_CAUSATION_PATTERNS = (
 
 VERSION_PATTERN = re.compile(r"\bv?\d+\.\d+\.\d+\b", re.IGNORECASE)
 EVIDENCE_BULLET = re.compile(r"^\s*[-*]\s+\S", re.MULTILINE)
+
+
+def parse_commander_output(raw: str) -> IncidentAssessment | None:
+    """Parse structured JSON commander output, or return ``None`` for legacy prose."""
+    if not is_json_task_output(raw):
+        return None
+    try:
+        return IncidentAssessment.model_validate_json(raw)
+    except (ValidationError, json.JSONDecodeError):
+        return None
+
+
+def _validate_structured_assessment(assessment: IncidentAssessment) -> ValidationResult:
+    if len(assessment.evidence) < 2:
+        return ValidationResult(
+            approved=False,
+            feedback="evidence must include at least two entries citing upstream investigations.",
+        )
+
+    evidence_block = "\n".join(f"- {item}" for item in assessment.evidence)
+    if not _evidence_cites_sources(evidence_block):
+        return ValidationResult(
+            approved=False,
+            feedback=(
+                "Each evidence entry should cite a source type (metrics, logs, deploys, "
+                "traces, or config changes) — not unsupported assertions."
+            ),
+        )
+
+    legacy_text = assessment_to_legacy_text(assessment)
+    causation_issue = _check_causation_vs_correlation(legacy_text)
+    if causation_issue is not None:
+        return causation_issue
+
+    return ValidationResult(approved=True)
+
+
+def assessment_to_legacy_text(assessment: IncidentAssessment) -> str:
+    """Render structured assessment as legacy sectioned text for scoring/helpers."""
+    evidence = "\n".join(f"- {item}" for item in assessment.evidence)
+    red_herrings = "\n".join(f"- {item}" for item in assessment.red_herrings)
+    return (
+        f"ROOT_CAUSE: {assessment.root_cause}\n"
+        f"SEVERITY: {assessment.severity}\n"
+        f"INCIDENT_TYPE: {assessment.incident_type}\n"
+        f"CONFIDENCE: {assessment.confidence}\n"
+        f"EVIDENCE:\n{evidence}\n"
+        f"RED_HERRINGS:\n{red_herrings}"
+    )
+
+
+def commander_output_text(raw: str) -> str:
+    """Normalize commander output to legacy sectioned text when possible."""
+    assessment = parse_commander_output(raw)
+    if assessment is not None:
+        return assessment_to_legacy_text(assessment)
+    return raw
 
 
 def _extract_field(text: str, field: str) -> str:
@@ -180,6 +242,10 @@ def commander_gate_validator(
 ) -> ValidationResult:
     """Validate commander output structure, evidence quality, and reasoning hygiene."""
     del critic_output  # gate validates upstream (commander) output
+
+    assessment = parse_commander_output(upstream_output)
+    if assessment is not None:
+        return _validate_structured_assessment(assessment)
 
     missing = _missing_sections(upstream_output)
     if missing:

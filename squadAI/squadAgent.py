@@ -1,5 +1,6 @@
 from uuid import UUID
 import asyncio
+from dataclasses import replace
 
 from pydantic import BaseModel, Field, InstanceOf, UUID4, model_validator
 
@@ -14,6 +15,7 @@ from squadAI.usage import (
     merge_usage_by_model,
     sum_task_usages,
 )
+from squadAI.output_schema import format_context_block, normalize_task_output, TaskOutputParseError
 from squadAI.validation import TaskValidationError, call_task_validator
 
 
@@ -25,10 +27,11 @@ def build_task_context(
     blocks = []
     for index, dependency in enumerate(dependencies, start=1):
         blocks.append(
-            f'<upstream_task index="{index}">\n'
-            f"<description>{dependency.task_description}</description>\n"
-            f"<output>{context_lookup[dependency.id]}</output>\n"
-            f"</upstream_task>"
+            format_context_block(
+                index=index,
+                description=dependency.task_description,
+                output=context_lookup[dependency.id],
+            )
         )
     return "\n\n".join(blocks)
 
@@ -189,7 +192,21 @@ class SquadAgents(BaseModel):
             task_context = None
 
         task_context = append_validation_feedback(task_context, validation_feedback)
-        return await task.agent.run_async(task, context=task_context, **kwargs)
+        run_result = await task.agent.run_async(task, context=task_context, **kwargs)
+        if task.output_schema is not None:
+            try:
+                normalized = normalize_task_output(
+                    run_result.output,
+                    model=task.output_schema,
+                )
+            except TaskOutputParseError as exc:
+                raise TaskValidationError(
+                    task,
+                    run_result.output,
+                    str(exc),
+                ) from exc
+            run_result = replace(run_result, output=normalized)
+        return run_result
 
     async def _run_self_validated(
         self,
