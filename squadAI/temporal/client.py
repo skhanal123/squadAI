@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from squadAI.squadAgent import SquadResult, TaskResult
 from squadAI.temporal.models import SquadWorkflowInput, SquadWorkflowResult, TaskActivityOutput
 from squadAI.temporal.workflow import SquadWorkflow
+from squadAI.trace import TaskExecutionTrace
 from squadAI.usage import TaskUsage, merge_usage_by_model, sum_task_usages
 
 DEFAULT_TASK_QUEUE = "squadai"
@@ -35,6 +36,11 @@ def workflow_result_to_squad_result(result: SquadWorkflowResult | dict) -> Squad
                 model=task_result.model,
                 input_tokens=task_result.input_tokens,
                 output_tokens=task_result.output_tokens,
+            ),
+            trace=(
+                TaskExecutionTrace.model_validate(task_result.trace)
+                if task_result.trace
+                else TaskExecutionTrace()
             ),
         )
         for task_result in result.task_results

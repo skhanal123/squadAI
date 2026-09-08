@@ -61,6 +61,7 @@ class TaskActivityOutput:
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    trace: dict | None = None
 
 
 @dataclass

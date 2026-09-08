@@ -16,6 +16,13 @@ from squadAI.output_schema import (
 )
 from squadAI.providers.base import LLMResponse, ToolCall
 from squadAI.tools import Tool
+from squadAI.trace import (
+    AgentRunTrace,
+    ReActStepRecord,
+    ToolCallRecord,
+    is_tool_error_result,
+    truncate_trace_text,
+)
 from squadAI.usage import AgentRunResult, TokenUsage, resolve_model_name
 
 
@@ -45,6 +52,10 @@ class ReactAgentError(Exception):
 
 class ReactAgentMaxIterationsError(ReactAgentError):
     """Raised when the ReAct loop exhausts max_iterations without a final response."""
+
+    def __init__(self, message: str, *, trace: AgentRunTrace | None = None) -> None:
+        super().__init__(message)
+        self.trace = trace
 
 
 class ReactAgentOutputSchemaError(ReactAgentError):
@@ -174,6 +185,51 @@ class ReactAgent(BaseModel):
             return str(tools_dict[tool_name].run(**arguments))
         except Exception as exc:
             return f"Error executing tool '{tool_name}': {exc}"
+
+    def _run_tool_calls(
+        self,
+        tools_dict: dict[str, Tool],
+        tool_calls: list[ToolCall],
+    ) -> tuple[list[ToolCallRecord], list[str]]:
+        records: list[ToolCallRecord] = []
+        results: list[str] = []
+        for tool_call in tool_calls:
+            result = self._execute_tool_call(
+                tools_dict,
+                tool_call.name,
+                tool_call.arguments,
+            )
+            results.append(result)
+            records.append(
+                ToolCallRecord(
+                    name=tool_call.name,
+                    arguments=tool_call.arguments,
+                    result=truncate_trace_text(result),
+                    error=is_tool_error_result(result),
+                )
+            )
+        return records, results
+
+    def _append_react_step(
+        self,
+        trace: AgentRunTrace,
+        *,
+        response: LLMResponse,
+        tool_calls: list[ToolCallRecord] | None = None,
+    ) -> None:
+        trace.react_steps.append(
+            ReActStepRecord(
+                iteration=len(trace.react_steps) + 1,
+                assistant_content=response.content,
+                finish_reason=response.finish_reason,
+                tool_calls=tool_calls or [],
+            )
+        )
+        trace.iterations = len(trace.react_steps)
+
+    def _success_trace(self, trace: AgentRunTrace) -> AgentRunTrace:
+        trace.status = "success"
+        return trace
 
     def _finalize_structured_output(
         self,
@@ -306,6 +362,7 @@ class ReactAgent(BaseModel):
     ) -> AgentRunResult:
         model = resolve_model_name(self.provider)
         usage = TokenUsage()
+        trace = AgentRunTrace()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
         response_format = self._response_format(
@@ -320,6 +377,7 @@ class ReactAgent(BaseModel):
                 response_format=response_format if structured else None,
             )
             usage = self._accumulate_usage(usage, response)
+            self._append_react_step(trace, response=response)
             output = response.content or ""
             if structured:
                 try:
@@ -337,7 +395,16 @@ class ReactAgent(BaseModel):
                         output_json_schema=output_json_schema,
                         prompt=STRUCTURED_RETRY_PROMPT,
                     )
-            return AgentRunResult(output=output, usage=usage, model=model)
+                    self._append_react_step(
+                        trace,
+                        response=LLMResponse(content=output),
+                    )
+            return AgentRunResult(
+                output=output,
+                usage=usage,
+                model=model,
+                trace=self._success_trace(trace),
+            )
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
@@ -347,20 +414,24 @@ class ReactAgent(BaseModel):
             usage = self._accumulate_usage(usage, response)
 
             if response.has_tool_calls:
+                tool_records, tool_results = self._run_tool_calls(
+                    tools_dict, response.tool_calls
+                )
+                self._append_react_step(
+                    trace,
+                    response=response,
+                    tool_calls=tool_records,
+                )
                 chat_history.add_assistant(
                     content=response.content,
                     tool_calls=self._tool_calls_to_api(response.tool_calls),
                 )
-                for tool_call in response.tool_calls:
-                    result = self._execute_tool_call(
-                        tools_dict,
-                        tool_call.name,
-                        tool_call.arguments,
-                    )
+                for tool_call, result in zip(response.tool_calls, tool_results):
                     chat_history.add_tool_result(tool_call.id, result)
                 continue
 
             if response.content:
+                self._append_react_step(trace, response=response)
                 output = response.content
                 if structured:
                     output, usage = self._resolve_structured_output(
@@ -371,15 +442,22 @@ class ReactAgent(BaseModel):
                         output_schema=output_schema,
                         output_json_schema=output_json_schema,
                     )
-                return AgentRunResult(output=output, usage=usage, model=model)
+                return AgentRunResult(
+                    output=output,
+                    usage=usage,
+                    model=model,
+                    trace=self._success_trace(trace),
+                )
 
             chat_history.add_chat(
                 role="user",
                 prompt="Provide a final answer or call a tool to continue.",
             )
 
+        trace.status = "react_exhausted"
         raise ReactAgentMaxIterationsError(
-            f"ReAct loop did not produce a final answer within {self.max_iterations} iterations"
+            f"ReAct loop did not produce a final answer within {self.max_iterations} iterations",
+            trace=trace,
         )
 
     async def invoke_async(
@@ -391,6 +469,7 @@ class ReactAgent(BaseModel):
     ) -> AgentRunResult:
         model = resolve_model_name(self.provider)
         usage = TokenUsage()
+        trace = AgentRunTrace()
         chat_history = self._create_chat_history()
         chat_history.add_chat(role="user", prompt=user_query)
         response_format = self._response_format(
@@ -405,6 +484,7 @@ class ReactAgent(BaseModel):
                 response_format=response_format if structured else None,
             )
             usage = self._accumulate_usage(usage, response)
+            self._append_react_step(trace, response=response)
             output = response.content or ""
             if structured:
                 try:
@@ -422,7 +502,16 @@ class ReactAgent(BaseModel):
                         output_json_schema=output_json_schema,
                         prompt=STRUCTURED_RETRY_PROMPT,
                     )
-            return AgentRunResult(output=output, usage=usage, model=model)
+                    self._append_react_step(
+                        trace,
+                        response=LLMResponse(content=output),
+                    )
+            return AgentRunResult(
+                output=output,
+                usage=usage,
+                model=model,
+                trace=self._success_trace(trace),
+            )
 
         tools_dict = self._create_tool_dict()
         tool_schemas = self._tool_schemas()
@@ -432,20 +521,24 @@ class ReactAgent(BaseModel):
             usage = self._accumulate_usage(usage, response)
 
             if response.has_tool_calls:
+                tool_records, tool_results = self._run_tool_calls(
+                    tools_dict, response.tool_calls
+                )
+                self._append_react_step(
+                    trace,
+                    response=response,
+                    tool_calls=tool_records,
+                )
                 chat_history.add_assistant(
                     content=response.content,
                     tool_calls=self._tool_calls_to_api(response.tool_calls),
                 )
-                for tool_call in response.tool_calls:
-                    result = self._execute_tool_call(
-                        tools_dict,
-                        tool_call.name,
-                        tool_call.arguments,
-                    )
+                for tool_call, result in zip(response.tool_calls, tool_results):
                     chat_history.add_tool_result(tool_call.id, result)
                 continue
 
             if response.content:
+                self._append_react_step(trace, response=response)
                 output = response.content
                 if structured:
                     output, usage = await self._resolve_structured_output_async(
@@ -456,13 +549,20 @@ class ReactAgent(BaseModel):
                         output_schema=output_schema,
                         output_json_schema=output_json_schema,
                     )
-                return AgentRunResult(output=output, usage=usage, model=model)
+                return AgentRunResult(
+                    output=output,
+                    usage=usage,
+                    model=model,
+                    trace=self._success_trace(trace),
+                )
 
             chat_history.add_chat(
                 role="user",
                 prompt="Provide a final answer or call a tool to continue.",
             )
 
+        trace.status = "react_exhausted"
         raise ReactAgentMaxIterationsError(
-            f"ReAct loop did not produce a final answer within {self.max_iterations} iterations"
+            f"ReAct loop did not produce a final answer within {self.max_iterations} iterations",
+            trace=trace,
         )

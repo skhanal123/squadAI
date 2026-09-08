@@ -16,6 +16,13 @@ from squadAI.usage import (
     sum_task_usages,
 )
 from squadAI.output_schema import format_context_block, normalize_task_output, TaskOutputParseError
+from squadAI.trace import (
+    AgentRunTrace,
+    GateRoundRecord,
+    TaskAttemptRecord,
+    TaskExecutionTrace,
+    ValidationRecord,
+)
 from squadAI.validation import TaskValidationError, call_task_validator
 
 
@@ -47,6 +54,28 @@ def append_validation_feedback(context: str | None, feedback: str | None) -> str
     if context:
         return f"{context}\n\n{feedback_block}"
     return feedback_block
+
+
+def _attempt_from_run_result(
+    run_result: AgentRunResult,
+    attempt: int,
+    *,
+    validation: ValidationRecord | None = None,
+) -> TaskAttemptRecord:
+    return TaskAttemptRecord(
+        attempt=attempt,
+        agent=run_result.trace or AgentRunTrace(),
+        validation=validation,
+        input_tokens=run_result.usage.input_tokens,
+        output_tokens=run_result.usage.output_tokens,
+    )
+
+
+def _single_run_trace(run_result: AgentRunResult) -> TaskExecutionTrace:
+    return TaskExecutionTrace(
+        status="success",
+        attempts=[_attempt_from_run_result(run_result, attempt=0)],
+    )
 
 
 def _pop_run_options(kwargs: dict) -> tuple[bool, dict]:
@@ -83,6 +112,7 @@ class TaskResult(BaseModel):
     description: str
     output: str
     usage: TaskUsage
+    trace: TaskExecutionTrace = Field(default_factory=TaskExecutionTrace)
 
 
 class SquadResult(BaseModel):
@@ -111,6 +141,13 @@ class SquadResult(BaseModel):
         for result in self.task_results:
             if result.task_id == task.id:
                 return result.usage
+        return None
+
+    def get_trace(self, task: Task) -> TaskExecutionTrace | None:
+        """Return the execution trace for a specific task, or ``None`` if not found."""
+        for result in self.task_results:
+            if result.task_id == task.id:
+                return result.trace
         return None
 
 
@@ -215,11 +252,13 @@ class SquadAgents(BaseModel):
         *,
         initial_feedback: str | None = None,
         **kwargs,
-    ) -> tuple[str, TaskUsage]:
+    ) -> tuple[str, TaskUsage, TaskExecutionTrace]:
         """Stage 1: validate this task's output and retry with feedback."""
         feedback = initial_feedback
         last_output = ""
         total_usage: TaskUsage | None = None
+        trace = TaskExecutionTrace()
+        attempt_records: list[TaskAttemptRecord] = []
 
         for attempt in range(task.max_retries + 1):
             run_result = await self._invoke_agent(
@@ -234,24 +273,41 @@ class SquadAgents(BaseModel):
                 total_usage = total_usage + run_result.task_usage
             last_output = run_result.output
 
-            result = call_task_validator(task, output=last_output)
-            if result.approved:
-                return last_output, total_usage
+            validation = call_task_validator(task, output=last_output)
+            validation_record = ValidationRecord(
+                approved=validation.approved,
+                feedback=validation.feedback,
+            )
+            attempt_records.append(
+                _attempt_from_run_result(
+                    run_result,
+                    attempt,
+                    validation=validation_record,
+                )
+            )
+            if validation.approved:
+                trace.status = "success"
+                trace.attempts = attempt_records
+                return last_output, total_usage, trace
 
-            feedback = result.feedback or "Validation failed."
+            feedback = validation.feedback or "Validation failed."
             if attempt >= task.max_retries:
+                trace.status = "validation_failed"
+                trace.attempts = attempt_records
                 raise TaskValidationError(task, last_output, feedback)
 
+        trace.status = "success"
+        trace.attempts = attempt_records
         return last_output, total_usage or TaskUsage.from_tokens(
             run_result.model, TokenUsage()
-        )
+        ), trace
 
     async def _run_validation_gate(
         self,
         gate_task: Task,
         context_lookup: dict[UUID, str],
         **kwargs,
-    ) -> tuple[str, str, TaskUsage, TaskUsage]:
+    ) -> tuple[str, str, TaskUsage, TaskUsage, TaskExecutionTrace, TaskExecutionTrace]:
         """Stage 2: run an upstream task and gate task until validation passes."""
         target = gate_task.validates
         target_feedback: str | None = None
@@ -259,13 +315,21 @@ class SquadAgents(BaseModel):
         last_gate_output = ""
         target_usage: TaskUsage | None = None
         gate_usage: TaskUsage | None = None
+        target_trace = TaskExecutionTrace(validated_by_gate=True)
+        gate_trace = TaskExecutionTrace(
+            is_validation_gate=True,
+            validates_task_id=str(target.id),
+        )
+        gate_rounds: list[GateRoundRecord] = []
 
         for attempt in range(gate_task.max_retries + 1):
-            last_target_output, attempt_target_usage = await self._execute_task(
-                target,
-                context_lookup,
-                validation_feedback=target_feedback,
-                **kwargs,
+            last_target_output, attempt_target_usage, upstream_trace = (
+                await self._execute_task(
+                    target,
+                    context_lookup,
+                    validation_feedback=target_feedback,
+                    **kwargs,
+                )
             )
             if target_usage is None:
                 target_usage = attempt_target_usage
@@ -280,23 +344,57 @@ class SquadAgents(BaseModel):
                 gate_usage = gate_usage + gate_result.task_usage
             last_gate_output = gate_result.output
 
-            result = call_task_validator(
+            validation = call_task_validator(
                 gate_task,
                 output=last_gate_output,
                 upstream_output=last_target_output,
             )
-            if result.approved:
-                return last_gate_output, last_target_output, gate_usage, target_usage
+            validation_record = ValidationRecord(
+                approved=validation.approved,
+                feedback=validation.feedback,
+            )
+            gate_rounds.append(
+                GateRoundRecord(
+                    round=attempt,
+                    upstream_attempts=list(upstream_trace.attempts),
+                    gate_agent=gate_result.trace or AgentRunTrace(),
+                    validation=validation_record,
+                )
+            )
+            if validation.approved:
+                target_trace.status = "success"
+                target_trace.attempts = list(upstream_trace.attempts)
+                gate_trace.status = "success"
+                gate_trace.gate_rounds = gate_rounds
+                gate_trace.attempts = [
+                    _attempt_from_run_result(gate_result, attempt=0)
+                ]
+                return (
+                    last_gate_output,
+                    last_target_output,
+                    gate_usage,
+                    target_usage,
+                    gate_trace,
+                    target_trace,
+                )
 
-            target_feedback = result.feedback or "Validation failed."
+            target_feedback = validation.feedback or "Validation failed."
             if attempt >= gate_task.max_retries:
+                target_trace.status = "validation_failed"
+                target_trace.attempts = list(upstream_trace.attempts)
+                gate_trace.status = "validation_failed"
+                gate_trace.gate_rounds = gate_rounds
                 raise TaskValidationError(gate_task, last_gate_output, target_feedback)
 
+        target_trace.attempts = list(upstream_trace.attempts)
+        gate_trace.gate_rounds = gate_rounds
         return (
             last_gate_output,
             last_target_output,
             gate_usage or gate_result.task_usage,
             target_usage or attempt_target_usage,
+            gate_trace,
+            target_trace,
         )
 
     async def _execute_task(
@@ -306,7 +404,7 @@ class SquadAgents(BaseModel):
         *,
         validation_feedback: str | None = None,
         **kwargs,
-    ) -> tuple[str, TaskUsage]:
+    ) -> tuple[str, TaskUsage, TaskExecutionTrace]:
         if task.validates is not None:
             raise ValueError(
                 f"Task {task.task_description!r} is a validation gate and must be "
@@ -320,14 +418,15 @@ class SquadAgents(BaseModel):
                 validation_feedback=validation_feedback,
                 **kwargs,
             )
-            return run_result.output, run_result.task_usage
+            return run_result.output, run_result.task_usage, _single_run_trace(run_result)
 
-        return await self._run_self_validated(
+        output, usage, trace = await self._run_self_validated(
             task,
             context_lookup,
             initial_feedback=validation_feedback,
             **kwargs,
         )
+        return output, usage, trace
 
     async def run_async(self, **kwargs) -> SquadResult:
         """Run the squad asynchronously by DAG level with parallel branches."""
@@ -347,7 +446,7 @@ class SquadAgents(BaseModel):
         context_lookup: dict[UUID, str] = {}
         task_results: list[TaskResult] = []
 
-        for level in levels:
+        for level_index, level in enumerate(levels):
             gate_tasks: list[Task] = []
             parallel_tasks: list[Task] = []
 
@@ -361,14 +460,21 @@ class SquadAgents(BaseModel):
                     parallel_tasks.append(task)
 
             for gate_task in gate_tasks:
-                gate_output, target_output, gate_usage, target_usage = (
-                    await self._run_validation_gate(
-                        gate_task,
-                        context_lookup,
-                        **run_kwargs,
-                    )
+                (
+                    gate_output,
+                    target_output,
+                    gate_usage,
+                    target_usage,
+                    gate_trace,
+                    target_trace,
+                ) = await self._run_validation_gate(
+                    gate_task,
+                    context_lookup,
+                    **run_kwargs,
                 )
                 target = gate_task.validates
+                gate_trace.dag_level = level_index
+                target_trace.dag_level = level_index
                 context_lookup[target.id] = target_output
                 context_lookup[gate_task.id] = gate_output
                 task_results.append(
@@ -377,6 +483,7 @@ class SquadAgents(BaseModel):
                         description=target.task_description,
                         output=target_output,
                         usage=target_usage,
+                        trace=target_trace,
                     )
                 )
                 task_results.append(
@@ -385,6 +492,7 @@ class SquadAgents(BaseModel):
                         description=gate_task.task_description,
                         output=gate_output,
                         usage=gate_usage,
+                        trace=gate_trace,
                     )
                 )
 
@@ -395,7 +503,10 @@ class SquadAgents(BaseModel):
                         for task in parallel_tasks
                     ]
                 )
-                for task, (output, usage) in zip(parallel_tasks, results):
+                ran_in_parallel = len(parallel_tasks) > 1
+                for task, (output, usage, trace) in zip(parallel_tasks, results):
+                    trace.dag_level = level_index
+                    trace.parallel = ran_in_parallel
                     context_lookup[task.id] = output
                     task_results.append(
                         TaskResult(
@@ -403,6 +514,7 @@ class SquadAgents(BaseModel):
                             description=task.task_description,
                             output=output,
                             usage=usage,
+                            trace=trace,
                         )
                     )
 

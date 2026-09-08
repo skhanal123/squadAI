@@ -12,6 +12,7 @@ from squadAI.providers.base import LLMResponse
 from squadAI.providers.mock import MockProvider
 from squadAI.temporal.models import TaskActivityInput, TaskActivityOutput
 from squadAI.temporal.registry import get_tools
+from squadAI.trace import TaskAttemptRecord, TaskExecutionTrace
 
 
 def _build_agent(agent_spec) -> Agent:
@@ -46,6 +47,20 @@ async def execute_squad_task(input: TaskActivityInput) -> TaskActivityOutput:
         task.get_output_json_schema = lambda: None
     run_result = agent.run(task, context=input.context or None, **input.run_kwargs)
     usage = run_result.task_usage
+    trace_payload = None
+    if run_result.trace is not None:
+        task_trace = TaskExecutionTrace(
+            status="success",
+            attempts=[
+                TaskAttemptRecord(
+                    attempt=0,
+                    agent=run_result.trace,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                )
+            ],
+        )
+        trace_payload = task_trace.model_dump()
     return TaskActivityOutput(
         task_id=input.task_id,
         description=input.description,
@@ -53,4 +68,5 @@ async def execute_squad_task(input: TaskActivityInput) -> TaskActivityOutput:
         model=usage.model,
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
+        trace=trace_payload,
     )

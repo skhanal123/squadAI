@@ -11,6 +11,7 @@ __all__ = [
     "TaskResult",
     "TaskUsage",
     "TaskValidationError",
+    "TaskExecutionTrace",
     "TaskOutputBase",
     "TokenUsage",
     "Tool",
@@ -100,4 +101,8 @@ def __getattr__(name: str):
         from squadAI.validation import TaskValidationError
 
         return TaskValidationError
+    if name == "TaskExecutionTrace":
+        from squadAI.trace import TaskExecutionTrace
+
+        return TaskExecutionTrace
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from squadAI.trace import AgentRunTrace
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class AgentRunResult:
     output: str
     usage: TokenUsage
     model: str
+    trace: "AgentRunTrace | None" = None
 
     def __str__(self) -> str:
         return self.output

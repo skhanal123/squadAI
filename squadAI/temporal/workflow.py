@@ -33,6 +33,7 @@ def _as_task_output(raw) -> TaskActivityOutput:
         model=raw.get("model", ""),
         input_tokens=int(raw.get("input_tokens", 0)),
         output_tokens=int(raw.get("output_tokens", 0)),
+        trace=raw.get("trace"),
     )
 
 
@@ -52,7 +53,7 @@ class SquadWorkflow:
 
         levels = execution_levels(input.tasks)
 
-        for level in levels:
+        for level_index, level in enumerate(levels):
             activity_inputs = []
             for task in level:
                 context = build_task_context_from_specs(
@@ -82,9 +83,13 @@ class SquadWorkflow:
                 for activity_input in activity_inputs
             ]
             level_outputs = await asyncio.gather(*handles)
+            ran_in_parallel = len(activity_inputs) > 1
 
             for raw_result in level_outputs:
                 result = _as_task_output(raw_result)
+                if result.trace is not None:
+                    result.trace["dag_level"] = level_index
+                    result.trace["parallel"] = ran_in_parallel
                 context_lookup[result.task_id] = result.output
                 task_results.append(result)
 
