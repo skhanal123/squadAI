@@ -171,6 +171,7 @@ def main() -> None:
         print(f"Incident output saved to: {run_dir}")
         print(f"  - {run_dir / 'incident_report.md'}")
         print(f"  - {run_dir / 'incident.json'}")
+        print(f"  - {run_dir / 'execution_trace.json'}")
         print(f"  - {run_dir / 'assessment.txt'}")
         print(f"  - {run_dir / 'runbook.txt'}")
         print(f"  - {run_dir / 'investigations'}/")

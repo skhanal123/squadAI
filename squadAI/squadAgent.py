@@ -1,6 +1,7 @@
 from uuid import UUID
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 
 from pydantic import BaseModel, Field, InstanceOf, UUID4, model_validator
 
@@ -22,6 +23,8 @@ from squadAI.trace import (
     TaskAttemptRecord,
     TaskExecutionTrace,
     ValidationRecord,
+    build_squad_trace_payload,
+    write_trace_file,
 )
 from squadAI.validation import TaskValidationError, call_task_validator
 
@@ -78,11 +81,18 @@ def _single_run_trace(run_result: AgentRunResult) -> TaskExecutionTrace:
     )
 
 
-def _pop_run_options(kwargs: dict) -> tuple[bool, dict]:
+def _pop_run_options(kwargs: dict) -> tuple[bool, Path | None, dict]:
     include_usage = kwargs.pop("include_usage_in_result", None)
     if include_usage is None:
         include_usage = get_settings().include_usage_in_result
-    return bool(include_usage), kwargs
+    trace_output_dir = kwargs.pop("trace_output_dir", None)
+    trace_dir = Path(trace_output_dir) if trace_output_dir is not None else None
+    return bool(include_usage), trace_dir, kwargs
+
+
+def _maybe_write_trace(result: "SquadResult", trace_output_dir: Path | None) -> None:
+    if trace_output_dir is not None:
+        result.write_trace(trace_output_dir)
 
 
 def _build_squad_result(
@@ -150,6 +160,29 @@ class SquadResult(BaseModel):
                 return result.trace
         return None
 
+    def trace_payload(self) -> dict:
+        """Return a JSON-serializable execution trace for all tasks."""
+        return build_squad_trace_payload(self.task_results)
+
+    def write_trace(
+        self,
+        path: Path | str,
+        *,
+        filename: str | None = None,
+    ) -> Path:
+        """Persist the squad execution trace under ``path``.
+
+        When ``path`` is a directory, writes ``execution_trace.json`` inside it.
+        When ``path`` ends with ``.json``, writes to that file directly.
+        """
+        from squadAI.trace import DEFAULT_TRACE_FILENAME
+
+        return write_trace_file(
+            self.trace_payload(),
+            path,
+            filename=filename or DEFAULT_TRACE_FILENAME,
+        )
+
 
 class SquadAgents(BaseModel):
     """
@@ -163,6 +196,7 @@ class SquadAgents(BaseModel):
         Use ``run_temporal()`` for durable orchestration via Temporal.
         Optional per-task validators support bounded self-retries and
         upstream validation gates.
+        Pass ``trace_output_dir`` to persist ``execution_trace.json`` after a run.
 
     Methods:
     validate_task_dependencies: validates the dependency graph at construction
@@ -430,7 +464,9 @@ class SquadAgents(BaseModel):
 
     async def run_async(self, **kwargs) -> SquadResult:
         """Run the squad asynchronously by DAG level with parallel branches."""
-        include_usage_in_result, run_kwargs = _pop_run_options(dict(kwargs))
+        include_usage_in_result, trace_output_dir, run_kwargs = _pop_run_options(
+            dict(kwargs)
+        )
 
         if not self.tasks:
             return SquadResult()
@@ -526,11 +562,13 @@ class SquadAgents(BaseModel):
             )
             final_output = context_lookup.get(task_by_id[last_spec.task_id].id)
 
-        return _build_squad_result(
+        result = _build_squad_result(
             task_results,
             final_output,
             include_usage_in_result=include_usage_in_result,
         )
+        _maybe_write_trace(result, trace_output_dir)
+        return result
 
     def run(self, **kwargs) -> SquadResult:
         """Run the squad synchronously (wrapper around :meth:`run_async`)."""
@@ -553,7 +591,9 @@ class SquadAgents(BaseModel):
         """Execute the squad as a durable Temporal workflow."""
         from squadAI.temporal.client import execute_squad_workflow
 
-        include_usage_in_result, run_kwargs = _pop_run_options(dict(kwargs))
+        include_usage_in_result, trace_output_dir, run_kwargs = _pop_run_options(
+            dict(kwargs)
+        )
         result = await execute_squad_workflow(
             client,
             self.to_workflow_input(**run_kwargs),
@@ -564,4 +604,5 @@ class SquadAgents(BaseModel):
             result = result.model_copy(
                 update={"usage_display": format_usage_display(result.task_results)}
             )
+        _maybe_write_trace(result, trace_output_dir)
         return result

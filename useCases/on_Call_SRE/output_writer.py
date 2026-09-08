@@ -99,6 +99,7 @@ def write_triage_output(
     Writes:
         - ``incident_report.md`` — human-readable incident summary
         - ``incident.json`` — structured incident data only
+        - ``execution_trace.json`` — ReAct steps, tool calls, validation retries
         - ``investigations/`` — metrics, logs, changes findings
         - ``assessment.txt`` — commander assessment
         - ``runbook.txt`` — recommended actions
@@ -123,6 +124,7 @@ def write_triage_output(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    result.write_trace(run_dir)
     (run_dir / "incident_report.md").write_text(
         _render_markdown(payload),
         encoding="utf-8",

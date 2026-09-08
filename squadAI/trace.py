@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 TRACE_RESULT_MAX_LEN = 2000
+DEFAULT_TRACE_FILENAME = "execution_trace.json"
 
 
 def truncate_trace_text(value: str, *, max_len: int = TRACE_RESULT_MAX_LEN) -> str:
@@ -89,3 +92,39 @@ class TaskExecutionTrace(BaseModel):
     validated_by_gate: bool = False
     attempts: list[TaskAttemptRecord] = Field(default_factory=list)
     gate_rounds: list[GateRoundRecord] = Field(default_factory=list)
+
+
+def build_squad_trace_payload(task_results: list[Any]) -> dict[str, Any]:
+    """Build a JSON-serializable execution trace for all squad tasks."""
+    return {
+        "tasks": [
+            {
+                "task_id": str(task_result.task_id),
+                "description": task_result.description,
+                "trace": task_result.trace.model_dump(),
+            }
+            for task_result in task_results
+        ],
+    }
+
+
+def write_trace_file(
+    payload: dict[str, Any],
+    path: Path | str,
+    *,
+    filename: str = DEFAULT_TRACE_FILENAME,
+) -> Path:
+    """Write an execution trace payload to ``path`` (directory or ``.json`` file)."""
+    destination = Path(path)
+    if destination.suffix.lower() == ".json":
+        trace_path = destination
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        destination.mkdir(parents=True, exist_ok=True)
+        trace_path = destination / filename
+
+    trace_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return trace_path

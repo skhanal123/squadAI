@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from squadAI.createAgent import Agent
 from squadAI.providers.base import LLMResponse, ToolCall
@@ -7,6 +10,7 @@ from squadAI.reactAgent import ReactAgent, ReactAgentMaxIterationsError
 from squadAI.squadAgent import SquadAgents
 from squadAI.task import Task
 from squadAI.tools import tool_wrapper
+from squadAI.trace import DEFAULT_TRACE_FILENAME
 from squadAI.validation import ValidationResult
 
 
@@ -143,6 +147,42 @@ class TestSquadTrace(unittest.TestCase):
         self.assertTrue(tax_trace.parallel)
         self.assertEqual(total_trace.dag_level, 1)
         self.assertFalse(total_trace.parallel)
+
+    def test_trace_payload_matches_task_results(self):
+        provider = MockProvider([LLMResponse(content="Done.")])
+        agent = Agent(backstory="Writer.", provider=provider)
+        task = Task(task_description="Write.", agent=agent)
+        result = SquadAgents(tasks=[task]).run()
+
+        payload = result.trace_payload()
+        self.assertEqual(len(payload["tasks"]), 1)
+        self.assertEqual(payload["tasks"][0]["description"], "Write.")
+        self.assertEqual(payload["tasks"][0]["trace"], result.task_results[0].trace.model_dump())
+
+    def test_write_trace_to_directory(self):
+        provider = MockProvider([LLMResponse(content="Done.")])
+        agent = Agent(backstory="Writer.", provider=provider)
+        task = Task(task_description="Write.", agent=agent)
+        result = SquadAgents(tasks=[task]).run()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = result.write_trace(Path(tmp))
+            self.assertEqual(trace_path, Path(tmp) / DEFAULT_TRACE_FILENAME)
+            payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["tasks"]), 1)
+
+    def test_run_writes_trace_when_trace_output_dir_set(self):
+        provider = MockProvider([LLMResponse(content="Done.")])
+        agent = Agent(backstory="Writer.", provider=provider)
+        task = Task(task_description="Write.", agent=agent)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = SquadAgents(tasks=[task]).run(trace_output_dir=Path(tmp))
+            trace_path = Path(tmp) / DEFAULT_TRACE_FILENAME
+            self.assertTrue(trace_path.is_file())
+            payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            self.assertEqual(result.get(task), "Done.")
+            self.assertEqual(len(payload["tasks"]), 1)
 
 
 if __name__ == "__main__":

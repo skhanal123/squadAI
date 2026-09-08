@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from squadAI.squadAgent import SquadResult, TaskResult
+from squadAI.createAgent import Agent
+from squadAI.providers.base import LLMResponse
+from squadAI.providers.mock import MockProvider
+from squadAI.squadAgent import SquadAgents, SquadResult, TaskResult
 from squadAI.usage import TaskUsage, TokenUsage
 
 from useCases.on_Call_SRE.output_writer import write_triage_output
@@ -70,6 +73,7 @@ class TestTriageOutputWriter(unittest.TestCase):
 
             self.assertTrue((run_dir / "incident_report.md").is_file())
             self.assertTrue((run_dir / "incident.json").is_file())
+            self.assertTrue((run_dir / "execution_trace.json").is_file())
             self.assertTrue((run_dir / "assessment.txt").is_file())
             self.assertTrue((run_dir / "runbook.txt").is_file())
             self.assertTrue((run_dir / "investigations" / "metrics.txt").is_file())
@@ -81,6 +85,13 @@ class TestTriageOutputWriter(unittest.TestCase):
             self.assertNotIn("pipeline", payload)
             self.assertEqual(payload["investigations"]["metrics"], "p99 spiked at 14:12:04")
             self.assertEqual(payload["assessment"], "ROOT_CAUSE: pool exhausted\nSEVERITY: SEV2")
+
+            trace_payload = json.loads(
+                (run_dir / "execution_trace.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(trace_payload["tasks"]), 5)
+            self.assertEqual(trace_payload["tasks"][0]["description"], "Investigate metrics")
+            self.assertIn("trace", trace_payload["tasks"][0])
 
             report = (run_dir / "incident_report.md").read_text(encoding="utf-8")
             self.assertIn("## Alert", report)
