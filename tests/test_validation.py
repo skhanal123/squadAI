@@ -35,6 +35,12 @@ class TestTaskValidationConfig(unittest.TestCase):
 
         self.assertIn("must list validates target", str(ctx.exception))
 
+    def test_non_gate_task_requires_agent(self):
+        with self.assertRaises(ValueError) as ctx:
+            Task(task_description="Write draft")
+
+        self.assertIn("requires an agent", str(ctx.exception))
+
 
 class TestStageOneSelfValidation(unittest.TestCase):
     def test_retries_task_until_validator_passes(self):
@@ -178,6 +184,89 @@ class TestStageTwoValidationGate(unittest.TestCase):
 
         self.assertEqual(len(result.task_results), 2)
         self.assertEqual(len(provider.calls), 2)
+
+
+class TestProgrammaticValidationGate(unittest.TestCase):
+    def test_skips_gate_llm_and_passthrough_upstream_output(self):
+        provider = MockProvider([LLMResponse(content="APPROVED: final draft")])
+        agent = Agent(backstory="Helper.", provider=provider)
+        writer = Task(task_description="Write draft", agent=agent)
+        gate = Task(
+            task_description="Validate draft",
+            dependency=[writer],
+            validates=writer,
+            validator=lambda gate_output, *, upstream_output: ValidationResult(
+                approved=upstream_output.startswith("APPROVED:")
+            ),
+        )
+        squad = SquadAgents(tasks=[writer, gate])
+
+        result = squad.run()
+
+        self.assertEqual(len(provider.calls), 1)
+        self.assertEqual(result.get(writer), "APPROVED: final draft")
+        self.assertEqual(result.get(gate), "APPROVED: final draft")
+
+    def test_retries_upstream_without_gate_llm(self):
+        gate_attempts = {"count": 0}
+
+        def draft_validator(
+            gate_output: str,
+            *,
+            upstream_output: str,
+        ) -> ValidationResult:
+            gate_attempts["count"] += 1
+            if upstream_output.startswith("APPROVED:"):
+                return ValidationResult(approved=True)
+            return ValidationResult(
+                approved=False,
+                feedback="Add more concrete detail.",
+            )
+
+        provider = MockProvider(
+            [
+                LLMResponse(content="Draft v1"),
+                LLMResponse(content="APPROVED: Draft v2"),
+            ]
+        )
+        writer = Task(task_description="Write draft", agent=Agent(backstory="Writer.", provider=provider))
+        gate = Task(
+            task_description="Validate draft",
+            dependency=[writer],
+            validates=writer,
+            validator=draft_validator,
+            max_retries=2,
+        )
+        squad = SquadAgents(tasks=[writer, gate])
+
+        result = squad.run()
+
+        self.assertEqual(result.get(writer), "APPROVED: Draft v2")
+        self.assertEqual(result.get(gate), "APPROVED: Draft v2")
+        self.assertEqual(gate_attempts["count"], 2)
+        self.assertEqual(len(provider.calls), 2)
+
+        writer_retry_prompt = provider.calls[1]["messages"][-1]["content"]
+        self.assertIn("<validation_feedback>", writer_retry_prompt)
+        self.assertIn("Add more concrete detail.", writer_retry_prompt)
+
+    def test_programmatic_gate_has_zero_usage(self):
+        provider = MockProvider([LLMResponse(content="APPROVED: draft")])
+        agent = Agent(backstory="Helper.", provider=provider)
+        writer = Task(task_description="Write draft", agent=agent)
+        gate = Task(
+            task_description="Validate draft",
+            dependency=[writer],
+            validates=writer,
+            validator=lambda gate_output, *, upstream_output: ValidationResult(
+                approved=upstream_output.startswith("APPROVED:")
+            ),
+        )
+        result = SquadAgents(tasks=[writer, gate]).run()
+
+        gate_usage = result.get_usage(gate)
+        self.assertEqual(gate_usage.input_tokens, 0)
+        self.assertEqual(gate_usage.output_tokens, 0)
 
 
 class TestValidationWithRunKwargs(unittest.TestCase):

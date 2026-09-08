@@ -344,6 +344,7 @@ class SquadAgents(BaseModel):
     ) -> tuple[str, str, TaskUsage, TaskUsage, TaskExecutionTrace, TaskExecutionTrace]:
         """Stage 2: run an upstream task and gate task until validation passes."""
         target = gate_task.validates
+        agent_gate = gate_task.agent is not None
         target_feedback: str | None = None
         last_target_output = ""
         last_gate_output = ""
@@ -355,6 +356,8 @@ class SquadAgents(BaseModel):
             validates_task_id=str(target.id),
         )
         gate_rounds: list[GateRoundRecord] = []
+        empty_gate_usage = TaskUsage.from_tokens("", TokenUsage())
+        gate_result: AgentRunResult | None = None
 
         for attempt in range(gate_task.max_retries + 1):
             last_target_output, attempt_target_usage, upstream_trace = (
@@ -371,16 +374,21 @@ class SquadAgents(BaseModel):
                 target_usage = target_usage + attempt_target_usage
             context_lookup[target.id] = last_target_output
 
-            gate_result = await self._invoke_agent(gate_task, context_lookup, **kwargs)
-            if gate_usage is None:
-                gate_usage = gate_result.task_usage
+            if agent_gate:
+                gate_result = await self._invoke_agent(
+                    gate_task, context_lookup, **kwargs
+                )
+                if gate_usage is None:
+                    gate_usage = gate_result.task_usage
+                else:
+                    gate_usage = gate_usage + gate_result.task_usage
+                last_gate_output = gate_result.output
             else:
-                gate_usage = gate_usage + gate_result.task_usage
-            last_gate_output = gate_result.output
+                last_gate_output = last_target_output
 
             validation = call_task_validator(
                 gate_task,
-                output=last_gate_output,
+                output=last_gate_output if agent_gate else "",
                 upstream_output=last_target_output,
             )
             validation_record = ValidationRecord(
@@ -391,7 +399,10 @@ class SquadAgents(BaseModel):
                 GateRoundRecord(
                     round=attempt,
                     upstream_attempts=list(upstream_trace.attempts),
-                    gate_agent=gate_result.trace or AgentRunTrace(),
+                    gate_agent=(
+                        (gate_result.trace or AgentRunTrace()) if agent_gate else None
+                    ),
+                    gate_skipped=not agent_gate,
                     validation=validation_record,
                 )
             )
@@ -400,13 +411,15 @@ class SquadAgents(BaseModel):
                 target_trace.attempts = list(upstream_trace.attempts)
                 gate_trace.status = "success"
                 gate_trace.gate_rounds = gate_rounds
-                gate_trace.attempts = [
-                    _attempt_from_run_result(gate_result, attempt=0)
-                ]
+                gate_trace.attempts = (
+                    [_attempt_from_run_result(gate_result, attempt=0)]
+                    if agent_gate
+                    else []
+                )
                 return (
                     last_gate_output,
                     last_target_output,
-                    gate_usage,
+                    gate_usage or empty_gate_usage,
                     target_usage,
                     gate_trace,
                     target_trace,
@@ -418,14 +431,17 @@ class SquadAgents(BaseModel):
                 target_trace.attempts = list(upstream_trace.attempts)
                 gate_trace.status = "validation_failed"
                 gate_trace.gate_rounds = gate_rounds
-                raise TaskValidationError(gate_task, last_gate_output, target_feedback)
+                failed_output = (
+                    last_target_output if not agent_gate else last_gate_output
+                )
+                raise TaskValidationError(gate_task, failed_output, target_feedback)
 
         target_trace.attempts = list(upstream_trace.attempts)
         gate_trace.gate_rounds = gate_rounds
         return (
             last_gate_output,
             last_target_output,
-            gate_usage or gate_result.task_usage,
+            gate_usage or empty_gate_usage,
             target_usage or attempt_target_usage,
             gate_trace,
             target_trace,
@@ -580,6 +596,9 @@ class SquadAgents(BaseModel):
 
         return squad_to_workflow_input(self, **kwargs)
 
+    def _has_validation_gates(self) -> bool:
+        return any(task.validates is not None for task in self.tasks)
+
     async def run_temporal(
         self,
         client,
@@ -589,6 +608,11 @@ class SquadAgents(BaseModel):
         **kwargs,
     ) -> SquadResult:
         """Execute the squad as a durable Temporal workflow."""
+        if self._has_validation_gates():
+            raise ValueError(
+                "Validation gates require run() or run_async(); "
+                "run_temporal() does not support them yet."
+            )
         from squadAI.temporal.client import execute_squad_workflow
 
         include_usage_in_result, trace_output_dir, run_kwargs = _pop_run_options(

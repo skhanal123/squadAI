@@ -10,6 +10,9 @@ from squadAI.usage import resolve_model_name
 
 
 def _base_agent_spec(agent) -> AgentSpec:
+    if agent is None:
+        return AgentSpec(backstory="")
+
     provider_mode = "env"
     if agent.provider is not None and isinstance(agent.provider, MockProvider):
         provider_mode = "mock"
@@ -43,7 +46,7 @@ def squad_to_workflow_input(squad: SquadAgents, **kwargs) -> SquadWorkflowInput:
     for level in execution_levels(specs):
         for spec in level:
             task = task_by_id[spec.task_id]
-            if not isinstance(task.agent.provider, MockProvider):
+            if task.agent is None or not isinstance(task.agent.provider, MockProvider):
                 continue
 
             agent_key = id(task.agent)

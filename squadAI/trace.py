@@ -75,7 +75,8 @@ class GateRoundRecord(BaseModel):
 
     round: int
     upstream_attempts: list[TaskAttemptRecord] = Field(default_factory=list)
-    gate_agent: AgentRunTrace = Field(default_factory=AgentRunTrace)
+    gate_agent: AgentRunTrace | None = None
+    gate_skipped: bool = False
     validation: ValidationRecord = Field(
         default_factory=lambda: ValidationRecord(approved=False)
     )

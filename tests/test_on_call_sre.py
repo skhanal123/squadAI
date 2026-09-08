@@ -170,6 +170,7 @@ class TestWorkflowBuild(unittest.TestCase):
         bundle = build_incident_squad(variant="qa")
         self.assertEqual(len(bundle.squad.tasks), 6)
         self.assertIsNotNone(bundle.task_qa)
+        self.assertIsNone(bundle.task_qa.agent)
 
     def test_baseline_and_qa_construct_without_error(self):
         build_incident_squad(variant="baseline")

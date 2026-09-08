@@ -117,19 +117,6 @@ def build_incident_squad(*, variant: Variant = "baseline") -> IncidentTriageBund
         ),
         max_iterations=6,
     )
-    qa_agent = Agent(
-        backstory=(
-            "You are an incident review lead. Your job is to enforce quality standards on "
-            "commander assessments before runbook execution:\n"
-            "- All required sections present and substantive.\n"
-            "- Evidence cites metrics, logs, and changes — not unsupported assertions.\n"
-            "- Severity and incident type align with cited evidence.\n"
-            "- Deploy/version claims use cautious language unless causation is proven.\n"
-            "- RED_HERRINGS populated when coincidental changes exist.\n"
-            "Approve only assessments that a production on-call team could act on safely."
-        ),
-        max_iterations=4,
-    )
     runbook_agent = Agent(
         backstory=(
             f"You are an operations executor. {TOOL_RULES}\n\n"
@@ -186,14 +173,13 @@ def build_incident_squad(*, variant: Variant = "baseline") -> IncidentTriageBund
     if variant == "qa":
         task_qa = Task(
             task_description=(
-                "Review the commander assessment against on-call quality standards "
+                "Validate the commander assessment against on-call quality standards "
                 "before runbook execution."
             ),
             dependency=[task_commander],
             validates=task_commander,
             validator=commander_gate_validator,
             max_retries=2,
-            agent=qa_agent,
         )
         runbook_dependency = [task_qa]
 
@@ -210,8 +196,6 @@ def build_incident_squad(*, variant: Variant = "baseline") -> IncidentTriageBund
         commander_agent,
         runbook_agent,
     ]
-    if task_qa is not None:
-        agents.append(qa_agent)
 
     tasks = [
         task_metrics,

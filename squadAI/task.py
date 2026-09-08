@@ -14,7 +14,7 @@ class Task(BaseModel):
     -----------
     id: unique id provided to the task when instantiated
     task_description (str): description of the task
-    agent: agent to which the task is assigned
+    agent: agent to which the task is assigned (optional for validation gates)
     dependency: list of other dependent tasks, if any, for this task to get executed
     task_output: format of the output when task is executed. This is an optional field
     output_schema: optional Pydantic model defining structured task output
@@ -27,11 +27,13 @@ class Task(BaseModel):
       approved or ``max_retries`` is exhausted.
     - Stage 2 (upstream gate): set ``validator`` and ``validates`` to an upstream
       task in ``dependency``. The upstream task re-runs until this task's validator
-      approves the pair of outputs.
+      approves. Omit ``agent`` for a programmatic gate (validator only); include
+      ``agent`` when the gate also runs a critic agent before validation.
 
     Validator signatures (``squad.run()`` template kwargs are not passed through):
     - Self: ``validator(output: str) -> ValidationResult | bool``
-    - Gate: ``validator(output: str, *, upstream_output: str) -> ValidationResult | bool``
+    - Gate: ``validator(gate_output: str, *, upstream_output: str) -> ValidationResult | bool``
+      (``gate_output`` is empty for programmatic gates)
 
     """
 
@@ -39,7 +41,7 @@ class Task(BaseModel):
         default_factory=uuid.uuid4, description="Provides the unique id for task"
     )
     task_description: str
-    agent: InstanceOf[Agent]
+    agent: InstanceOf[Agent] | None = None
     dependency: list[Any] = Field(
         default=[], description="List of dependency tasks for this task to get complete"
     )
@@ -82,6 +84,10 @@ class Task(BaseModel):
             raise ValueError(
                 f"Task {self.task_description!r} must list validates target "
                 f"in dependency"
+            )
+        if self.validates is None and self.agent is None:
+            raise ValueError(
+                f"Task {self.task_description!r} requires an agent"
             )
         return self
 

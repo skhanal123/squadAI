@@ -185,5 +185,30 @@ class TestSquadTrace(unittest.TestCase):
             self.assertEqual(len(payload["tasks"]), 1)
 
 
+class TestProgrammaticGateTrace(unittest.TestCase):
+    def test_gate_skipped_recorded_in_trace(self):
+        provider = MockProvider([LLMResponse(content="APPROVED: final draft")])
+        agent = Agent(backstory="Helper.", provider=provider)
+        writer = Task(task_description="Write draft", agent=agent)
+        gate = Task(
+            task_description="Validate draft",
+            dependency=[writer],
+            validates=writer,
+            validator=lambda gate_output, *, upstream_output: ValidationResult(
+                approved=upstream_output.startswith("APPROVED:")
+            ),
+        )
+        result = SquadAgents(tasks=[writer, gate]).run()
+
+        gate_trace = result.get_trace(gate)
+        self.assertTrue(gate_trace.is_validation_gate)
+        self.assertEqual(len(gate_trace.attempts), 0)
+        self.assertEqual(len(gate_trace.gate_rounds), 1)
+        gate_round = gate_trace.gate_rounds[0]
+        self.assertTrue(gate_round.gate_skipped)
+        self.assertIsNone(gate_round.gate_agent)
+        self.assertTrue(gate_round.validation.approved)
+
+
 if __name__ == "__main__":
     unittest.main()

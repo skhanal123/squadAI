@@ -236,12 +236,11 @@ def _check_causation_vs_correlation(text: str) -> ValidationResult | None:
 
 
 def commander_gate_validator(
-    critic_output: str,
+    _gate_output: str,
     *,
     upstream_output: str,
 ) -> ValidationResult:
     """Validate commander output structure, evidence quality, and reasoning hygiene."""
-    del critic_output  # gate validates upstream (commander) output
 
     assessment = parse_commander_output(upstream_output)
     if assessment is not None:
