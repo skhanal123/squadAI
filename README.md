@@ -20,33 +20,53 @@ Define your squad, call `SquadAgents.run()`, and each task runs through its assi
 
 ```mermaid
 flowchart TD
-    subgraph multi["Multi-agent squad"]
+    subgraph multi["Create Multi-Agent Squad"]
+        direction TB
         Tools["Tools · @tool_wrapper"]
         A1["Agent 1"]
         A2["Agent 2"]
         AN["Agent N"]
-        Tasks["Tasks · deps · output_schema · validator"]
+        Tasks["Tasks + Deps + Output Schema + Validation"]
         Tools --> A1 & A2 & AN
         A1 & A2 & AN --> Tasks
     end
 
-    Tasks --> Squad["SquadAgents — workflow management"]
-    Squad --> DAG["DAG scheduling · parallel levels"]
-    Squad -.-> Temporal["Temporal · durable orchestration"]
+    Squad["YOUR WORKFLOW"]
 
-    DAG --> Exec["Execute SquadAgents"]
-    Temporal --> Exec
+    subgraph execution["Execution"]
+        direction TB
+        DAG["DAG scheduling · parallel levels"]
+        Temporal["Temporal · durable orchestration"]
+        Exec["Execute SquadAgents"]
+        Ctx["Merge upstream task outputs"]
+        React["ReAct loop · LLM · tool calls"]
+        DAG --> Exec
+        Temporal -.-> Exec
+        Exec --> Ctx --> React
+    end
 
-    Exec --> Ctx["Merge upstream task outputs"]
-    Ctx --> React["ReAct loop · LLM · tool calls"]
+    subgraph validation["Validation"]
+        direction TB
+        Val{"Validation?"}
+        Retry["Bounded retry / upstream gate"]
+        Val -->|rejected| Retry
+    end
 
-    React --> Val{"Validation?"}
-    Val -->|rejected| Retry["Bounded retry / upstream gate"]
+    subgraph observability["Observability"]
+        direction TB
+        Result["SquadResult"]
+        Usage["Usage · tokens per task & by model"]
+        Trace["Traceability · execution_trace.json"]
+        Result --> Usage
+        Result --> Trace
+    end
+
+    Tasks --> Squad
+    Squad --> DAG
+    Squad -.-> Temporal
+    React --> Val
     Retry --> Exec
-    Val -->|approved| Result["SquadResult"]
-
-    Result --> Usage["Usage · tokens per task & by model"]
-    Result --> Trace["Traceability · execution_trace.json"]
+    Val -->|approved| Result
 ```
 
 ## Core features
