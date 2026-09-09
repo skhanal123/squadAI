@@ -1,79 +1,66 @@
 ## SquadAI
 
-SquadAI is a lightweight Python framework for orchestrating multiple AI agents, tools, and dependent tasks. It helps you compose collaborative AI workflows where one task can consume the output of previous tasks.
+SquadAI is a lightweight Python framework for **orchestrating multi-agent AI workflows** — wiring specialized agents, tools, and interdependent tasks with full observability.
 
 ## What this project does
 
-SquadAI provides a simple abstraction layer around:
+Run collaborative multi-agent workflows with DAG-based orchestration, native tool calling, automatic context passing between dependent tasks, output validation, and built-in usage and trace observability — without assembling those pieces yourself.
 
-- **Agents**: role-based workers with backstory/prompts (`squadAI/createAgent.py`)
-- **Tools**: Python functions wrapped as callable tools for agents (`squadAI/tools.py`)
-- **Tasks**: structured units of work assigned to agents (`squadAI/task.py`)
-- **Orchestration**: in-process sequential runs plus durable Temporal workflows (`squadAI/squadAgent.py`, `squadAI/temporal/`)
-- **ReAct-style execution loop**: tool-calling interaction with an LLM (`squadAI/reactAgent.py`)
+**Key moving parts:**
 
-At a high level, you define tools and agents, wire tasks together, and `SquadAgents` runs them in order—each task is handled by its assigned agent through an LLM tool-calling loop:
+- **Tools** — Python functions exposed to the LLM via `@tool_wrapper`
+- **Agents** — specialized workers (backstory, tools, iteration limits) assigned to individual tasks
+- **Tasks** — units of work with dependencies, optional `output_schema`, and optional validators
+- **SquadAgents** — workflow orchestrator; schedules tasks by DAG level, runs independent branches in parallel, in-process or via Temporal
+- **ReAct loop** — per-task LLM execution cycle: plan, call tools, observe results, respond
+- **Validation** — bounded retries on rejected output; upstream gates re-run earlier tasks until approved
+- **SquadResult** — aggregated task outputs, token usage (per task and by model), and optional execution traces
+
+Define your squad, call `SquadAgents.run()`, and each task runs through its assigned agent. Downstream tasks receive upstream outputs as context; validation and observability are captured on every run.
 
 ```mermaid
 flowchart TD
-    subgraph setup["Define workflow"]
-        Tools["Tools<br/>(Python functions)"]
-        Agents["Agents<br/>(backstory + tools)"]
-        Tasks["Tasks<br/>(description, agent, optional deps)"]
-        Tools --> Agents --> Tasks
+    subgraph multi["Multi-agent squad"]
+        Tools["Tools · @tool_wrapper"]
+        A1["Agent 1"]
+        A2["Agent 2"]
+        AN["Agent N"]
+        Tasks["Tasks · deps · output_schema · validator"]
+        Tools --> A1 & A2 & AN
+        A1 & A2 & AN --> Tasks
     end
 
-    Tasks --> Run["SquadAgents.run() / run_temporal()"]
-    Run -->|"in-process"| Loop["Next task in list"]
-    Run -->|"Temporal"| Temporal["SquadWorkflow<br/>(DAG levels + parallel branches)"]
-    Temporal --> Activity["execute_squad_task activity"]
-    Activity --> AgentRun["Agent.run()"]
+    Tasks --> Squad["SquadAgents — workflow management"]
+    Squad --> DAG["DAG scheduling · parallel levels"]
+    Squad -.-> Temporal["Temporal · durable orchestration"]
 
-    subgraph execute["Per-task execution"]
-        Loop --> Deps{"Has<br/>dependencies?"}
-        Deps -->|yes| Context["Merge upstream<br/>task outputs"]
-        Deps -->|no| AgentRun
-        Context --> AgentRun
-        AgentRun --> React["ReAct loop"]
-        React <-->|"plan / respond"| LLM["LLM"]
-        React -->|"tool_calls"| ToolExec["Execute Python tools"]
-        ToolExec -->|"tool result"| React
-        React --> Store["Store task output"]
-    end
+    DAG --> Exec["Execute SquadAgents"]
+    Temporal --> Exec
 
-    Store --> Result["SquadResult"]
-    Temporal --> Result
-```
+    Exec --> Ctx["Merge upstream task outputs"]
+    Ctx --> React["ReAct loop · LLM · tool calls"]
 
-## Repository structure
+    React --> Val{"Validation?"}
+    Val -->|rejected| Retry["Bounded retry / upstream gate"]
+    Retry --> Exec
+    Val -->|approved| Result["SquadResult"]
 
-```text
-squadAI/
-  __init__.py     # public API exports
-  chat.py         # chat history helper (incl. native tool messages)
-  createAgent.py  # Agent model and execution entrypoint
-  config.py       # pydantic-settings (LLM, Temporal, agent defaults)
-  llm.py          # LLM provider factory
-  providers/      # LLM provider adapters (one module per backend)
-  reactAgent.py   # ReAct loop with native tool calling
-  squadAgent.py   # multi-task orchestrator
-  temporal/       # Temporal workflow, activities, worker helpers
-    temporal_worker.py  # Temporal worker entrypoint
-  task.py         # Task model
-  tools.py        # Tool class and decorator wrapper
-  utils.py        # function signature / JSON schema utilities
-example_run.py    # runnable examples
-tests/            # unit tests (mock provider)
-requirements.txt  # Python dependencies
+    Result --> Usage["Usage · tokens per task & by model"]
+    Result --> Trace["Traceability · execution_trace.json"]
 ```
 
 ## Core features
 
-1. **Agent creation** with reusable backstories/prompts
-2. **Tool integration** from normal Python functions via `@tool_wrapper`
-3. **Task automation** with parameterized task templates (e.g. `{a}`, `{b}`)
-4. **Task dependency chaining** where downstream tasks consume upstream output
-5. **Multi-agent orchestration** through `SquadAgents.run()`
+1. **Multi-agent squads** — different agents (backstory, tools, iteration limits) handle different tasks in the same workflow
+2. **DAG workflow management** — task dependencies form a directed graph; independent branches run in parallel; cycles and missing deps are caught at squad construction
+3. **Interdependent task context** — downstream tasks receive upstream outputs as labeled `<context>` blocks automatically
+4. **Native tool calling** — ReAct loop with provider-native `tool_calls`; expose Python functions via `@tool_wrapper`
+5. **Structured output** — optional Pydantic `output_schema` on tasks for typed JSON results
+6. **Validation gates** — per-task validators with bounded retries; upstream gates re-run earlier tasks until output is approved
+7. **Token usage tracking** — input/output tokens aggregated per task, per model, and squad-wide on `SquadResult` (including ReAct loops and validation retries)
+8. **Execution traceability** — optional `execution_trace.json` with agent steps, validation rounds, and DAG level metadata (`trace_output_dir`)
+9. **Multi-provider LLM support** — OpenAI, Anthropic, Gemini, Groq, DeepSeek, and OpenAI-compatible endpoints (Ollama, etc.)
+10. **Temporal integration** — durable orchestration via `run_temporal()` for production workloads with parallel DAG branches
 
 ## Installation
 
@@ -162,67 +149,36 @@ python example_run.py
 3. Executes each DAG level in parallel; dependent levels wait for upstream activities.
 4. Each task runs inside the `execute_squad_task` activity (retries, timeouts, durability).
 
-**Local Temporal setup:**
-
-```bash
-# Install Temporal CLI, then start dev server
-temporal server start-dev
-
-# Terminal 1 — worker (registers example tools)
-python -m squadAI.temporal.temporal_worker
-
-# Terminal 2 — run a squad via Temporal from Python
-python -c "
-import asyncio
-from squadAI.temporal.worker import create_temporal_client
-from squadAI import Agent, Task, SquadAgents
-
-async def main():
-    agent = Agent(backstory='You are concise.')
-    task = Task(task_description='Say hello in one sentence.', agent=agent)
-    squad = SquadAgents(tasks=[task])
-    client = await create_temporal_client()
-    result = await squad.run_temporal(client)
-    print(result.final)
-
-asyncio.run(main())
-"
-```
-
-Environment variables:
-
-```env
-TEMPORAL_ADDRESS=localhost:7233
-TEMPORAL_TASK_QUEUE=squadai
-```
-
 Both paths ultimately call `Agent.run()` → `ReactAgent.invoke()` with native tool calling.
 
 ## Token usage and billing
 
 Every LLM completion records input/output token counts. Usage is aggregated per task (including ReAct loops and validation retries) and rolled up on `SquadResult`.
 
-After `squad.run()`:
+Token fields are always populated on `SquadResult` — use them for billing or cost tracking after `squad.run()`:
 
 ```python
 result = squad.run()
 
-# Per-task billing (model + tokens)
+# Per-task: model name and token counts
 for tr in result.task_results:
     print(tr.usage.model, tr.usage.input_tokens, tr.usage.output_tokens)
 
-# Squad totals keyed by model (apply your price table)
+# Squad-wide totals grouped by model — plug in your own price table
 for model, tokens in result.usage_by_model.items():
     cost = your_price_fn(model, tokens.input_tokens, tokens.output_tokens)
 
-# Optional customer-facing summary (does not affect billing fields)
+# Optional human-readable summary (set INCLUDE_USAGE_IN_RESULT=true or pass include_usage_in_result=True)
 result = squad.run(include_usage_in_result=True)
 print(result.usage_display)
 ```
 
-- `SquadResult.usage` — squad-wide token totals (all models combined).
-- `SquadResult.usage_by_model` — tokens grouped by model name for cost calculation.
-- `include_usage_in_result` — when `True`, sets `usage_display`; usage fields are always populated regardless of this flag.
+Notes:
+
+- `result.task_results[].usage` — per-task tokens (model, input, output).
+- `result.usage_by_model` — squad totals keyed by model for cost calculation.
+- `result.usage` — combined squad-wide token totals across all models.
+- `result.usage_display` — formatted summary string; only set when `include_usage_in_result=True`.
 
 ## Testing
 
