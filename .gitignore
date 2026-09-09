@@ -12,3 +12,6 @@ __pycache__/
 
 # cursor
 .cursor/
+
+# Internal trace exercise (not for commit)
+useCases/lite_sre/

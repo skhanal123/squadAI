@@ -58,11 +58,11 @@ squadAI/
   reactAgent.py   # ReAct loop with native tool calling
   squadAgent.py   # multi-task orchestrator
   temporal/       # Temporal workflow, activities, worker helpers
+    temporal_worker.py  # Temporal worker entrypoint
   task.py         # Task model
   tools.py        # Tool class and decorator wrapper
   utils.py        # function signature / JSON schema utilities
 example_run.py    # runnable examples
-temporal_worker.py # Temporal worker entrypoint
 tests/            # unit tests (mock provider)
 requirements.txt  # Python dependencies
 ```
@@ -169,7 +169,7 @@ python example_run.py
 temporal server start-dev
 
 # Terminal 1 — worker (registers example tools)
-python temporal_worker.py
+python -m squadAI.temporal.temporal_worker
 
 # Terminal 2 — run a squad via Temporal from Python
 python -c "

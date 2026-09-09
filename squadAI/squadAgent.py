@@ -16,7 +16,11 @@ from squadAI.usage import (
     merge_usage_by_model,
     sum_task_usages,
 )
-from squadAI.output_schema import format_context_block, normalize_task_output, TaskOutputParseError
+from squadAI.output_schema import (
+    format_context_block,
+    normalize_task_output,
+    TaskOutputParseError,
+)
 from squadAI.trace import (
     AgentRunTrace,
     GateRoundRecord,
@@ -51,9 +55,7 @@ def append_validation_feedback(context: str | None, feedback: str | None) -> str
     if not feedback:
         return context or None
 
-    feedback_block = (
-        f"<validation_feedback>\n{feedback}\n</validation_feedback>"
-    )
+    feedback_block = f"<validation_feedback>\n{feedback}\n</validation_feedback>"
     if context:
         return f"{context}\n\n{feedback_block}"
     return feedback_block
@@ -241,9 +243,7 @@ class SquadAgents(BaseModel):
 
     def _validated_targets(self) -> dict[UUID, Task]:
         validated_targets = {
-            task.validates.id: task
-            for task in self.tasks
-            if task.validates is not None
+            task.validates.id: task for task in self.tasks if task.validates is not None
         }
         if len(validated_targets) != sum(1 for task in self.tasks if task.validates):
             raise ValueError("Each upstream task may have only one validation gate")
@@ -332,9 +332,11 @@ class SquadAgents(BaseModel):
 
         trace.status = "success"
         trace.attempts = attempt_records
-        return last_output, total_usage or TaskUsage.from_tokens(
-            run_result.model, TokenUsage()
-        ), trace
+        return (
+            last_output,
+            total_usage or TaskUsage.from_tokens(run_result.model, TokenUsage()),
+            trace,
+        )
 
     async def _run_validation_gate(
         self,
@@ -468,7 +470,11 @@ class SquadAgents(BaseModel):
                 validation_feedback=validation_feedback,
                 **kwargs,
             )
-            return run_result.output, run_result.task_usage, _single_run_trace(run_result)
+            return (
+                run_result.output,
+                run_result.task_usage,
+                _single_run_trace(run_result),
+            )
 
         output, usage, trace = await self._run_self_validated(
             task,

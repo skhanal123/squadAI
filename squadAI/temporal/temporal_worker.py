@@ -4,8 +4,8 @@ Run the SquadAI Temporal worker.
 Start Temporal locally first, for example with the Temporal CLI:
     temporal server start-dev
 
-Then register your tools and start the worker:
-    python temporal_worker.py
+Then register your tools and start the worker (from the repo root):
+    python -m squadAI.temporal.temporal_worker
 """
 
 import asyncio
